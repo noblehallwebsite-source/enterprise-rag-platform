@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+openai
+
+sentence-transformers
+chromadb
+numpy
+
+prometheus-fastapi-instrumentator
