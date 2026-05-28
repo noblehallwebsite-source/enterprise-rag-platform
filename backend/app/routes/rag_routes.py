@@ -52,11 +52,11 @@ def rag_query(
         "service": data.service
     }
 
-    # result = run_rag_pipeline(
-    #     session_id=data.session_id,
-    #     query=data.query,
-    #     filters=filters
-    # )
+    result = run_rag_pipeline(
+        session_id=data.session_id,
+        query=data.query,
+        filters=filters
+    )
 
     result = run_streaming_rag_pipeline(
         client=client,
