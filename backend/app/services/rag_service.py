@@ -1,5 +1,9 @@
-from app.services.chroma_service import (
-    search_documents
+# from app.services.chroma_service import (
+#     search_documents
+# )
+
+from app.services.hybrid_search_service import (
+    hybrid_search
 )
 
 from app.services.ai_service import (
@@ -8,7 +12,13 @@ from app.services.ai_service import (
 
 def run_rag_pipeline(query: str, filters: dict = None):
 
-    retrieved_docs = search_documents(
+#     retrieved_docs = search_documents(
+#         query=query,
+#         top_k=3,
+#         filters=filters
+#     )
+
+    retrieved_docs = hybrid_search(
         query=query,
         top_k=3,
         filters=filters
