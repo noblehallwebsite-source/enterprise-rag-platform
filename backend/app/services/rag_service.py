@@ -6,11 +6,12 @@ from app.services.ai_service import (
     generate_ai_response
 )
 
-def run_rag_pipeline(query: str):
+def run_rag_pipeline(query: str, filters: dict = None):
 
     retrieved_docs = search_documents(
         query=query,
-        top_k=3
+        top_k=3,
+        filters=filters
     )
 
     context = "\n".join([

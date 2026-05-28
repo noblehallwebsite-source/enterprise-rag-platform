@@ -30,14 +30,26 @@ def add_document(
 
 def search_documents(
     query: str,
-    top_k: int = 3
+    top_k: int = 3,
+    filters: dict = None
 ):
 
     query_embedding = generate_embedding(query)
 
+    chroma_filters = {}
+
+    if filters:
+
+        for key, value in filters.items():
+
+            if value is not None:
+
+                chroma_filters[key] = value
+
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=top_k
+        n_results=top_k,
+        where=chroma_filters if chroma_filters else None
     )
 
     formatted_results = []

@@ -31,7 +31,10 @@ def store_document(
         document_id=document_id,
         text=data.text,
         metadata={
-            "source": data.source
+            "source": data.source,
+            "environment": data.environment,
+            "severity": data.severity,
+            "service": data.service
         }
     )
 
@@ -56,7 +59,10 @@ def store_large_document(
             document_id=chunk_id,
             text=chunk,
             metadata={
-                "source": data.source
+                "source": data.source,
+                "environment": data.environment,
+                "severity": data.severity,
+                "service": data.service
             }
         )
 
@@ -71,11 +77,20 @@ def semantic_search(
     data: SearchRequest
 ):
 
+    filters = {
+        "environment": data.environment,
+        "severity": data.severity,
+        "source": data.source,
+        "service": data.service
+    }
+
     results = search_documents(
-        query=data.query
+        query=data.query,
+        filters=filters
     )
 
     return {
         "query": data.query,
+        "filters": filters,
         "results": results
     }
