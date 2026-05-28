@@ -44,6 +44,8 @@ class SearchRequest(BaseModel):
 
 class RagQueryRequest(BaseModel):
 
+    session_id: str
+
     query: str
 
     environment: Optional[str] = None

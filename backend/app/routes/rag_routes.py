@@ -24,6 +24,7 @@ def rag_query(
     }
 
     result = run_rag_pipeline(
+        session_id=data.session_id,
         query=data.query,
         filters=filters
     )
