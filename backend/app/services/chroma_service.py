@@ -36,21 +36,33 @@ def search_documents(
 
     query_embedding = generate_embedding(query)
 
-    chroma_filters = {}
-
+    # Filter preparation
+    where_clause = None
+    
     if filters:
-
-        for key, value in filters.items():
-
-            if value is not None:
-
-                chroma_filters[key] = value
+        # Strip out any keys that have None values
+        clean_filters = {k: v for k, v in filters.items() if v is not None}
+        
+        if len(clean_filters) > 1:
+            # 🔥 FIX 2: Explicitly format multiple keys with ChromaDB's logical '$and' operator
+            where_clause = {
+                "$and": [
+                    {key: value} 
+                    for key, value in clean_filters.items()
+                ]
+            }
+        elif len(clean_filters) == 1:
+            where_clause = clean_filters
 
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
-        where=chroma_filters if chroma_filters else None
+        where=where_clause  # Pass our safe where clause structure
     )
+
+    # Defensive Guard: If Chroma DB returns completely empty results
+    if not results or not results["documents"] or not results["documents"][0]:
+        return []
 
     formatted_results = []
 
@@ -63,7 +75,6 @@ def search_documents(
         distances,
         metadatas
     ):
-
         formatted_results.append({
             "text": doc,
             "distance": distance,
