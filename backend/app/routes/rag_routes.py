@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 from app.models.request_models import (
     RagQueryRequest
@@ -17,11 +17,8 @@ router = APIRouter()
 # =====================================================================
 # REAL-TIME STREAMING RAG ROUTE
 # =====================================================================
-@router.post("/rag/stream")  # 🔥 FIX 2: Explicitly named path for clarity
-def rag_query_stream(
-    data: RagQueryRequest
-):
-
+@router.post("/rag/stream")
+def rag_query_stream(data: RagQueryRequest, background_tasks: BackgroundTasks):  # 🔥 Inject here
     filters = {
         "environment": data.environment,
         "severity": data.severity,
@@ -29,11 +26,11 @@ def rag_query_stream(
         "service": data.service
     }
 
-    # Execute and return your text/plain chunk stream generator
     result = run_streaming_rag_pipeline(
         client=client,
         session_id=data.session_id,
         query=data.query,
+        background_tasks=background_tasks,  # 🔥 Pass down here
         filters=filters
     )
 
