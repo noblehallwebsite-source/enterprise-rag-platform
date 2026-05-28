@@ -111,8 +111,7 @@
 
 
 
-# streaming logic
-
+import time
 # from app.services.chroma_service import (
 #     search_documents
 # )
@@ -134,11 +133,19 @@ from app.services.memory_service import (
     get_conversation_history
 )
 
-# STEP 1: Fast API Streaming Import
+# Fast API Streaming Import
 from fastapi.responses import StreamingResponse
 
+# STEP 3: Centralized Prometheus operational metrics instrumentation
+from app.services.metrics_service import (
+    rag_requests_total,
+    rag_failures_total,
+    rag_latency_seconds,
+    retrieved_documents_total
+)
+
 # =====================================================================
-# STEP 2: STREAM GENERATOR WITH BACKGROUND MEMORY PERSISTENCE
+# STREAM GENERATOR WITH BACKGROUND MEMORY PERSISTENCE
 # =====================================================================
 def stream_llm_response(client, augmented_prompt, session_id, query):
     response = client.chat.completions.create(
@@ -165,7 +172,7 @@ def stream_llm_response(client, augmented_prompt, session_id, query):
             full_response_text += delta
             yield delta
 
-    # STEP 9 Integration: Once streaming concludes, save the turn to history
+    # Once streaming concludes, save the turn to history
     save_message(
         session_id=session_id,
         role="user",
@@ -179,24 +186,33 @@ def stream_llm_response(client, augmented_prompt, session_id, query):
 
 
 # =====================================================================
-# EXISTING BLOCKING RAG PIPELINE
+# EXISTING BLOCKING RAG PIPELINE (WITH METRICS)
 # =====================================================================
 def run_rag_pipeline(
     session_id: str,
     query: str,
     filters: dict = None
 ):
-    conversation_history = get_conversation_history(session_id)
+    # STEP 4 & 7: Track requests entrypoint and capture potential failures
+    rag_requests_total.inc()
+    start_time = time.time()
 
-    history_context = ""
-    for message in conversation_history:
-        history_context += f"{message['role']}: {message['content']}\n"
+    try:
+        conversation_history = get_conversation_history(session_id)
 
-    retrieved_docs = hybrid_search(query=query, top_k=10, filters=filters)
-    reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
-    context = "\n".join([item["text"] for item in reranked_docs])
+        history_context = ""
+        for message in conversation_history:
+            history_context += f"{message['role']}: {message['content']}\n"
 
-    augmented_prompt = f"""
+        retrieved_docs = hybrid_search(query=query, top_k=10, filters=filters)
+        reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
+        
+        # STEP 5: Track how many docs successfully made it past the reranking filter
+        retrieved_documents_total.observe(len(reranked_docs))
+
+        context = "\n".join([item["text"] for item in reranked_docs])
+
+        augmented_prompt = f"""
 You are an enterprise infrastructure AI assistant.
 
 Conversation History:
@@ -215,20 +231,29 @@ Return a JSON response with the keys:
 "next_followup_suggestions": 2–3 ideas for follow-up questions
 "critical_infrastructure_issue": true/false (detected security or availability risk)"""
 
-    ai_answer = generate_ai_response(augmented_prompt)
+        ai_answer = generate_ai_response(augmented_prompt)
 
-    save_message(session_id=session_id, role="user", content=query)
-    save_message(session_id=session_id, role="assistant", content=ai_answer)
+        save_message(session_id=session_id, role="user", content=query)
+        save_message(session_id=session_id, role="assistant", content=ai_answer)
 
-    return {
-        "query": query,
-        "retrieved_context": reranked_docs,
-        "ai_answer": ai_answer
-    }
+        # STEP 6: Calculate total structural execution latency before returning
+        total_latency = time.time() - start_time
+        rag_latency_seconds.observe(total_latency)
+
+        return {
+            "query": query,
+            "retrieved_context": reranked_docs,
+            "ai_answer": ai_answer
+        }
+
+    except Exception as e:
+        # STEP 7: Increment failures counter on errors
+        rag_failures_total.inc()
+        raise e
 
 
 # =====================================================================
-# STEPS 3, 4, 5: NEW STREAMING RAG PIPELINE
+# NEW STREAMING RAG PIPELINE (WITH METRICS)
 # =====================================================================
 def run_streaming_rag_pipeline(
     client,
@@ -236,33 +261,41 @@ def run_streaming_rag_pipeline(
     query: str,
     filters: dict = None
 ):
-    # STEP 4: Keep history loading exactly as before
-    conversation_history = get_conversation_history(session_id)
+    # STEP 4 & 7: Initialize instrumentation tracking hooks
+    rag_requests_total.inc()
+    start_time = time.time()
 
-    history_context = ""
-    for message in conversation_history:
-        history_context += f"{message['role']}: {message['content']}\n"
+    try:
+        # Keep history loading exactly as before
+        conversation_history = get_conversation_history(session_id)
 
-    # STEP 4: Keep retrieval, hybrid search, and reranking exactly as before
-    retrieved_docs = hybrid_search(
-        query=query,
-        top_k=10,
-        filters=filters
-    )
+        history_context = ""
+        for message in conversation_history:
+            history_context += f"{message['role']}: {message['content']}\n"
 
-    reranked_docs = rerank_documents(
-        query=query,
-        documents=retrieved_docs,
-        top_k=3
-    )
+        # Keep retrieval, hybrid search, and reranking exactly as before
+        retrieved_docs = hybrid_search(
+            query=query,
+            top_k=10,
+            filters=filters
+        )
 
-    context = "\n".join([
-        item["text"]
-        for item in reranked_docs
-    ])
+        reranked_docs = rerank_documents(
+            query=query,
+            documents=retrieved_docs,
+            top_k=3
+        )
 
-    # Construct clean prompt for real-time text layout (No enforced JSON during text streaming)
-    augmented_prompt = f"""
+        # STEP 5: Track retrieval document observation volume
+        retrieved_documents_total.observe(len(reranked_docs))
+
+        context = "\n".join([
+            item["text"]
+            for item in reranked_docs
+        ])
+
+        # Construct clean prompt for real-time text layout
+        augmented_prompt = f"""
 You are an enterprise infrastructure AI assistant.
 
 Conversation History:
@@ -277,13 +310,22 @@ Current User Question:
 Provide a direct, comprehensive engineering markdown response based on the context.
 """
 
-    # STEP 5: Replace final response with real-time text/plain stream
-    return StreamingResponse(
-        stream_llm_response(
-            client=client,
-            augmented_prompt=augmented_prompt,
-            session_id=session_id,
-            query=query
-        ),
-        media_type="text/plain"
-    )
+        # STEP 6: Capture TTSR (Time to Stream Response) heavy lifting block latency
+        total_latency = time.time() - start_time
+        rag_latency_seconds.observe(total_latency)
+
+        # Replace final response with real-time text/plain stream
+        return StreamingResponse(
+            stream_llm_response(
+                client=client,
+                augmented_prompt=augmented_prompt,
+                session_id=session_id,
+                query=query
+            ),
+            media_type="text/plain"
+        )
+
+    except Exception as e:
+        # STEP 7: Track system crash logs natively inside Prometheus metrics
+        rag_failures_total.inc()
+        raise e
