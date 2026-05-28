@@ -136,7 +136,7 @@ from app.services.memory_service import (
 # Fast API Streaming Import
 from fastapi.responses import StreamingResponse
 
-# STEP 3: Centralized Prometheus operational metrics instrumentation
+# Centralized Prometheus operational metrics instrumentation
 from app.services.metrics_service import (
     rag_requests_total,
     rag_failures_total,
@@ -144,10 +144,16 @@ from app.services.metrics_service import (
     retrieved_documents_total
 )
 
+# Evaluation service module import
+from app.services.evaluation_service import (
+    evaluate_grounding
+)
+
 # =====================================================================
-# STREAM GENERATOR WITH BACKGROUND MEMORY PERSISTENCE
+# UPDATED: STREAM GENERATOR WITH BACKGROUND MEMORY & EVALUATION
 # =====================================================================
-def stream_llm_response(client, augmented_prompt, session_id, query):
+# Added reranked_docs to the function parameters
+def stream_llm_response(client, augmented_prompt, session_id, query, reranked_docs):
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
@@ -165,14 +171,33 @@ def stream_llm_response(client, augmented_prompt, session_id, query):
 
     full_response_text = ""
     
-    # Process token chunks incrementally live from Groq
+    # 1. Process token chunks incrementally live from Groq (Fast UI response)
     for chunk in response:
         if chunk.choices and chunk.choices[0].delta.content:
             delta = chunk.choices[0].delta.content
             full_response_text += delta
             yield delta
 
-    # Once streaming concludes, save the turn to history
+    # -----------------------------------------------------------------
+    # THE STREAM HAS ENDED: Execute background operations safely
+    # -----------------------------------------------------------------
+    try:
+        # 2. Run Grounding Evaluation on the completed text string
+        evaluation_result = evaluate_grounding(
+            answer=full_response_text,
+            retrieved_documents=reranked_docs
+        )
+        
+        # Log it to your terminal/container stdout for verification
+        print(f"\n[EVALUATION] Session: {session_id} | Result: {evaluation_result}")
+        
+        # MLOps Pro-Tip: You can expand this line later to save evaluation_result 
+        # to your persistent database alongside logs for tracking drift/hallucinations!
+        
+    except Exception as eval_error:
+        print(f"\n[EVALUATION FAILURE] Could not evaluate grounding: {eval_error}")
+
+    # 3. Save the completed conversational turn to history database
     save_message(
         session_id=session_id,
         role="user",
@@ -186,14 +211,13 @@ def stream_llm_response(client, augmented_prompt, session_id, query):
 
 
 # =====================================================================
-# EXISTING BLOCKING RAG PIPELINE (WITH METRICS)
+# EXISTING BLOCKING RAG PIPELINE (WITH METRICS & EVALUATION)
 # =====================================================================
 def run_rag_pipeline(
     session_id: str,
     query: str,
     filters: dict = None
 ):
-    # STEP 4 & 7: Track requests entrypoint and capture potential failures
     rag_requests_total.inc()
     start_time = time.time()
 
@@ -207,7 +231,6 @@ def run_rag_pipeline(
         retrieved_docs = hybrid_search(query=query, top_k=10, filters=filters)
         reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
         
-        # STEP 5: Track how many docs successfully made it past the reranking filter
         retrieved_documents_total.observe(len(reranked_docs))
 
         context = "\n".join([item["text"] for item in reranked_docs])
@@ -233,27 +256,31 @@ Return a JSON response with the keys:
 
         ai_answer = generate_ai_response(augmented_prompt)
 
+        evaluation_result = evaluate_grounding(
+            answer=ai_answer,
+            retrieved_documents=reranked_docs
+        )
+
         save_message(session_id=session_id, role="user", content=query)
         save_message(session_id=session_id, role="assistant", content=ai_answer)
 
-        # STEP 6: Calculate total structural execution latency before returning
         total_latency = time.time() - start_time
         rag_latency_seconds.observe(total_latency)
 
         return {
             "query": query,
             "retrieved_context": reranked_docs,
-            "ai_answer": ai_answer
+            "ai_answer": ai_answer,
+            "evaluation": evaluation_result
         }
 
     except Exception as e:
-        # STEP 7: Increment failures counter on errors
         rag_failures_total.inc()
         raise e
 
 
 # =====================================================================
-# NEW STREAMING RAG PIPELINE (WITH METRICS)
+# UPDATED: STREAMING RAG PIPELINE
 # =====================================================================
 def run_streaming_rag_pipeline(
     client,
@@ -261,19 +288,16 @@ def run_streaming_rag_pipeline(
     query: str,
     filters: dict = None
 ):
-    # STEP 4 & 7: Initialize instrumentation tracking hooks
     rag_requests_total.inc()
     start_time = time.time()
 
     try:
-        # Keep history loading exactly as before
         conversation_history = get_conversation_history(session_id)
 
         history_context = ""
         for message in conversation_history:
             history_context += f"{message['role']}: {message['content']}\n"
 
-        # Keep retrieval, hybrid search, and reranking exactly as before
         retrieved_docs = hybrid_search(
             query=query,
             top_k=10,
@@ -286,7 +310,6 @@ def run_streaming_rag_pipeline(
             top_k=3
         )
 
-        # STEP 5: Track retrieval document observation volume
         retrieved_documents_total.observe(len(reranked_docs))
 
         context = "\n".join([
@@ -294,7 +317,6 @@ def run_streaming_rag_pipeline(
             for item in reranked_docs
         ])
 
-        # Construct clean prompt for real-time text layout
         augmented_prompt = f"""
 You are an enterprise infrastructure AI assistant.
 
@@ -310,22 +332,21 @@ Current User Question:
 Provide a direct, comprehensive engineering markdown response based on the context.
 """
 
-        # STEP 6: Capture TTSR (Time to Stream Response) heavy lifting block latency
         total_latency = time.time() - start_time
         rag_latency_seconds.observe(total_latency)
 
-        # Replace final response with real-time text/plain stream
+        # Pass your reranked_docs context list down into the streaming payload generator
         return StreamingResponse(
             stream_llm_response(
                 client=client,
                 augmented_prompt=augmented_prompt,
                 session_id=session_id,
-                query=query
+                query=query,
+                reranked_docs=reranked_docs  # 🔥 Added parameter passing here
             ),
             media_type="text/plain"
         )
 
     except Exception as e:
-        # STEP 7: Track system crash logs natively inside Prometheus metrics
         rag_failures_total.inc()
         raise e
