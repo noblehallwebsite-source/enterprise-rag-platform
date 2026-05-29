@@ -104,7 +104,7 @@ def process_document_ingestion(
 
     
 
-@celery_app.task(name="app.tasks.ingestion_tasks.process_uploaded_file")
+@celery_app.task(name="app.tasks.ingestion_tasks.process_uploaded_file", ignore_result=False)
 def process_uploaded_file(tenant_id: str, file_path: str, metadata: dict = None):
     logger.info(f"[WORKER] Processing uploaded file: {file_path} for tenant: {tenant_id}")
     
