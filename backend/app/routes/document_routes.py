@@ -121,6 +121,9 @@ from app.tasks.ingestion_tasks import (
     process_uploaded_file
 )
 
+from celery.result import AsyncResult
+from app.tasks.celery_app import celery_app  # Ensure this points to where celery_app is defined
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -304,3 +307,40 @@ async def upload_document(
         "tenant_id": tenant_id,
         "task_id": task.id
     }
+
+
+
+
+# =====================================================================
+# 5. ASYNCHRONOUS TASK TELEMETRY ROUTE (STATUS TRACKING)
+# =====================================================================
+@router.get("/tasks/{task_id}", status_code=status.HTTP_200_OK)
+def get_task_status(task_id: str):
+    """
+    Queries the Redis result backend to fetch live task execution telemetry.
+    Enables frontend UI polling loops to monitor document chunking progress.
+    """
+    try:
+        # Connects directly to the task state context inside Redis
+        task_result = AsyncResult(task_id, app=celery_app)
+        
+        # If the task failed, task_result.result contains the raw exception string
+        result_payload = None
+        if task_result.status == "SUCCESS":
+            result_payload = task_result.result
+        elif task_result.status == "FAILURE":
+            result_payload = str(task_result.result)
+
+        return {
+            "task_id": task_id,
+            "status": task_result.status,          # PENDING, STARTED, SUCCESS, FAILURE
+            "result": result_payload,               # Returns metadata output dictionary or error stack
+            "traceback": task_result.traceback if task_result.status == "FAILURE" else None
+        }
+        
+    except Exception as e:
+        logger.error(f"[API ERROR] Failed retrieving telemetry status for task {task_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal status tracking layer failed: {str(e)}"
+        )
