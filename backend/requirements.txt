@@ -9,3 +9,6 @@ numpy
 
 prometheus-fastapi-instrumentator
 rank-bm25
+# Distributed Asynchronous Task Queue Layer
+celery==5.4.0
+redis==5.0.4

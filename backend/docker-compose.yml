@@ -1,22 +1,77 @@
+# version: "3.9"
+
+# services:
+
+#   backend:
+#     build: .
+
+#     container_name: enterprise-rag-backend
+
+#     ports:
+#       - "8000:8000"
+
+#     env_file:
+#       - .env
+
+#     volumes:
+#       - chroma_data:/app/chroma_storage
+
+#     restart: unless-stopped
+
+# volumes:
+#   chroma_data:
+
 version: "3.9"
 
 services:
-
+  # =====================================================================
+  # 1. CORE API GATEWAY SERVICE
+  # =====================================================================
   backend:
     build: .
-
     container_name: enterprise-rag-backend
-
     ports:
       - "8000:8000"
-
     env_file:
       - .env
-
+    environment:
+      - REDIS_URL=redis://redis-broker:6379/0
     volumes:
       - chroma_data:/app/chroma_storage
-
     restart: unless-stopped
+    depends_on:
+      - redis-broker
+
+  # =====================================================================
+  # 2. REDIS TASK BROKER
+  # =====================================================================
+  redis-broker:
+    image: redis:7-alpine
+    container_name: enterprise-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # =====================================================================
+  # 3. DISTRIBUTED CELERY ASYNC WORKER POOL
+  # =====================================================================
+  celery-worker:
+    build: .
+    container_name: enterprise-rag-worker
+    # Overrides the default CMD to boot up as a worker listening to our app instance
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis-broker:6379/0
+    volumes:
+      - chroma_data:/app/chroma_storage
+    restart: unless-stopped
+    depends_on:
+      - redis-broker
 
 volumes:
   chroma_data:
+  redis_data:

@@ -109,26 +109,28 @@ from app.services.chroma_service import (
     search_documents
 )
 
-from app.services.chunking_service import (
-    chunk_text
-)
-
 # 🔥 Import authorization gateway layer
 from app.services.security_service import (
     authorize_request
 )
 
+from app.tasks.ingestion_tasks import process_document_ingestion
+
 router = APIRouter()
 
 
 # =====================================================================
-# STANDARD DOCUMENT INGESTION ROUTE (TENANT-ISOLATED & PROTECTED)
+# 1. STANDARD DOCUMENT INGESTION ROUTE (SYNCHRONOUS / FAST EXECUTION)
 # =====================================================================
-@router.post("/documents")
+@router.post("/documents", status_code=status.HTTP_201_CREATED)
 def store_document(
     data: DocumentRequest,
     auth: dict = Depends(authorize_request)  # 🔥 Intercepts header credential state
 ):
+    """
+    Handles immediate insertion of brief documents, snippets, or metadata adjustments.
+    Executes synchronously within the request lifecycle for instant validation feedback.
+    """
     # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
@@ -158,13 +160,18 @@ def store_document(
 
 
 # =====================================================================
-# LARGE DOCUMENT INGESTION ROUTE (TENANT-ISOLATED & PROTECTED)
+# 2. LARGE DOCUMENT INGESTION ROUTE (ASYNCHRONOUS / DISTRIBUTED WORKER)
 # =====================================================================
-@router.post("/documents/large")
+@router.post("/documents/large", status_code=status.HTTP_202_ACCEPTED)
 def store_large_document(
     data: LargeDocumentRequest,
     auth: dict = Depends(authorize_request)  # 🔥 Intercepts header credential state
 ):
+    """
+    Handles massive system logs, dumps, or document uploads.
+    Offloads execution instantly to Celery via Redis to prevent FastAPI thread starvation 
+    and shield ChromaDB from concurrent multi-container write conflicts.
+    """
     # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
@@ -172,38 +179,43 @@ def store_large_document(
             detail="Access Denied: The provided API credential token is not authorized to modify this tenant workspace."
         )
 
-    chunks = chunk_text(data.text)
+    # Package metadata parameters to pass cleanly through the Celery serializer
+    metadata_payload = {
+        "source": data.source,
+        "environment": data.environment,
+        "severity": data.severity,
+        "service": data.service
+    }
 
-    for chunk in chunks:
-        chunk_id = str(uuid.uuid4())
+    # 🔥 Dispatch processing to the Celery broker via .delay()
+    # Serializes payload, drops it into Redis, and instantly unblocks the API gateway
+    task = process_document_ingestion.delay(
+        tenant_id=data.tenant_id,
+        text=data.text,
+        metadata=metadata_payload
+    )
 
-        add_document(
-            tenant_id=data.tenant_id,
-            document_id=chunk_id,
-            text=chunk,
-            metadata={
-                "source": data.source,
-                "environment": data.environment,
-                "severity": data.severity,
-                "service": data.service
-            }
-        )
-
+    # Return a 202 Accepted response along with the tracking UUID token for polling
     return {
-        "message": "Large document stored",
+        "message": "Large document accepted and queued for asynchronous background processing.",
         "tenant_id": data.tenant_id,
-        "chunks_created": len(chunks)
+        "task_id": task.id,
+        "status": "Accepted"
     }
 
 
 # =====================================================================
-# STANDALONE SEMANTIC SEARCH ROUTE (TENANT-ISOLATED & PROTECTED)
+# 3. STANDALONE SEMANTIC SEARCH ROUTE (TENANT-ISOLATED & PROTECTED)
 # =====================================================================
-@router.post("/search")
+@router.post("/search", status_code=status.HTTP_200_OK)
 def semantic_search(
     data: SearchRequest,
     auth: dict = Depends(authorize_request)  # 🔥 Intercepts header credential state
 ):
+    """
+    Performs isolated real-time semantic query routing.
+    Limits collection operations strictly to the workspace bound to the tenant payload.
+    """
     # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
