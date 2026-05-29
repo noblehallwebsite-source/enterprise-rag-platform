@@ -96,8 +96,9 @@
 #     }
 import os
 import uuid
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 
 from app.models.request_models import (
     DocumentRequest,
@@ -115,12 +116,13 @@ from app.services.security_service import (
     authorize_request
 )
 
-from app.tasks.ingestion_tasks import process_document_ingestion
-
-from fastapi import APIRouter, UploadFile, File, HTTPException, status
-from app.tasks.ingestion_tasks import process_uploaded_file
+from app.tasks.ingestion_tasks import (
+    process_document_ingestion,
+    process_uploaded_file
+)
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Keep paths simple matching your workspace working directory layout
 UPLOAD_DIR = "/app/uploads" if os.path.exists("/app") else "uploads"
@@ -194,14 +196,12 @@ def store_large_document(
     }
 
     # 🔥 Dispatch processing to the Celery broker via .delay()
-    # Serializes payload, drops it into Redis, and instantly unblocks the API gateway
     task = process_document_ingestion.delay(
         tenant_id=data.tenant_id,
         text=data.text,
         metadata=metadata_payload
     )
 
-    # Return a 202 Accepted response along with the tracking UUID token for polling
     return {
         "message": "Large document accepted and queued for asynchronous background processing.",
         "tenant_id": data.tenant_id,
@@ -250,10 +250,27 @@ def semantic_search(
     }
 
 
+# =====================================================================
+# 4. BINARY ENTERPRISE FILE UPLOAD ROUTE (SECURED, MULTIPART FORM DATA)
+# =====================================================================
+@router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
+async def upload_document(
+    tenant_id: str = Form(...),              # 🔥 Explicitly marked as Form data 
+    file: UploadFile = File(...),            # Handles incoming binary file stream
+    auth: dict = Depends(authorize_request)  # 🔥 Enforces platform key verification
+):
+    """
+    Accepts raw enterprise documents (PDF/DOCX) via multipart/form-data payload,
+    safely verifies the tenant authorization token, writes the temporary payload to disk,
+    and forwards background extraction logic straight to our async worker queue.
+    """
+    # 🔥 Security Cross-Check: Prevent cross-tenant data leakage or malicious parameter injection
+    if auth["tenant_id"] != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The provided API credential token is not authorized to modify this tenant workspace."
+        )
 
-@router.post("/upload")
-async def upload_document(tenant_id: str, file: UploadFile = File(...)):
-    
     # ==========================================
     # Save Uploaded File
     # ==========================================
@@ -265,6 +282,7 @@ async def upload_document(tenant_id: str, file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             buffer.write(await file.read())
     except Exception as e:
+        logger.error(f"[API ERROR] Failed writing uploaded artifact to storage volume: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to write file to disk storage: {str(e)}"
@@ -282,6 +300,7 @@ async def upload_document(tenant_id: str, file: UploadFile = File(...)):
     )
 
     return {
-        "message": "File uploaded successfully",
+        "message": "File uploaded successfully and verification processing initiated.",
+        "tenant_id": tenant_id,
         "task_id": task.id
     }
