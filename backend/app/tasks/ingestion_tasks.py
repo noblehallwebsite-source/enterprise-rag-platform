@@ -1,4 +1,5 @@
 import uuid
+import time
 import logging
 from app.tasks.celery_app import celery_app
 from app.services.chunking_service import chunk_text
@@ -6,40 +7,95 @@ from app.services.chroma_service import add_document
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(name="app.tasks.ingestion_tasks.process_document_ingestion")
+@celery_app.task(
+    name="app.tasks.ingestion_tasks.process_document_ingestion",
+    bind=True,  # Gives us access to self.request for tracking metadata
+    max_retries=3,
+    default_retry_delay=5
+)
 def process_document_ingestion(
+    self,
     tenant_id: str,
     text: str,
     metadata: dict = None
 ):
     """
     Executes entirely within an isolated worker process.
-    Chunks text blocks and streams them into the tenant-partitioned vector index.
+    Chunks text blocks, tracks internal latency metrics, and streams embeddings
+    into the tenant-partitioned vector index with production-ready telemetry.
     """
-    logger.info(f"[WORKER] Initiating asynchronous background ingestion for tenant: {tenant_id}")
+    task_id = self.request.id or str(uuid.uuid4())
+    metadata = metadata or {}
+    
+    logger.info(
+        f"[WORKER START] [TaskID: {task_id}] Asynchronous ingestion triggered "
+        f"for tenant_id='{tenant_id}' | Payload size: {len(text)} chars."
+    )
+    
+    start_total_time = time.perf_counter()
     
     try:
+        # 1. Profile Chunking Pipeline Latency
+        start_chunk = time.perf_counter()
         chunks = chunk_text(text)
-        logger.info(f"[WORKER] Successfully split raw asset payload into {len(chunks)} chunks.")
+        chunk_duration = time.perf_counter() - start_chunk
+        
+        logger.info(
+            f"[WORKER EXEC] [TaskID: {task_id}] Split raw asset into {len(chunks)} chunks "
+            f"in {chunk_duration:.4f}s for tenant_id='{tenant_id}'."
+        )
 
-        for chunk in chunks:
+        if not chunks:
+            logger.warning(
+                f"[WORKER WARN] [TaskID: {task_id}] Ingestion payload yielded 0 chunks. "
+                f"Aborting downstream write workflows for tenant_id='{tenant_id}'."
+            )
+            return {"status": "skipped", "tenant_id": tenant_id, "chunks_created": 0}
+
+        # 2. Profile Batch Vector Storage Writes
+        start_write = time.perf_counter()
+        for idx, chunk in enumerate(chunks):
             chunk_id = str(uuid.uuid4())
             
-            # Enforces data tenant isolation context down to the vector collection
+            # Inject trace parameters into object metadata dictionary
+            enriched_metadata = {
+                **metadata,
+                "chunk_index": idx,
+                "parent_task_id": task_id
+            }
+            
             add_document(
                 tenant_id=tenant_id,
                 document_id=chunk_id,
                 text=chunk,
-                metadata=metadata or {}
+                metadata=enriched_metadata
             )
+            
+        write_duration = time.perf_counter() - start_write
+        total_duration = time.perf_counter() - start_total_time
 
-        logger.info(f"[WORKER SUCCESS] Completed compilation sequence for tenant: {tenant_id}")
+        logger.info(
+            f"[WORKER SUCCESS] [TaskID: {task_id}] Storage pipeline commit verified for tenant_id='{tenant_id}'. "
+            f"Metrics -> Total: {total_duration:.3f}s | Chunking: {chunk_duration:.3f}s | VectorDB Write: {write_duration:.3f}s. "
+            f"Total Chunks: {len(chunks)}."
+        )
+        
         return {
             "status": "completed",
+            "task_id": task_id,
             "tenant_id": tenant_id,
-            "chunks_created": len(chunks)
+            "chunks_created": len(chunks),
+            "execution_metrics": {
+                "total_seconds": round(total_duration, 4),
+                "db_write_seconds": round(write_duration, 4)
+            }
         }
         
     except Exception as e:
-        logger.error(f"[WORKER CRITICAL FAILURE] Execution failed for tenant {tenant_id}: {str(e)}")
+        total_duration = time.perf_counter() - start_total_time
+        # logger.exception automatically extracts and binds stack traces to stderr/stdout
+        logger.exception(
+            f"[WORKER CRITICAL FAILURE] [TaskID: {task_id}] Vector pipeline crashed after {total_duration:.3f}s "
+            f"for tenant_id='{tenant_id}'. Error details: {str(e)}"
+        )
         raise e
