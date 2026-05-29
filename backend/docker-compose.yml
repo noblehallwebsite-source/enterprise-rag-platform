@@ -25,7 +25,7 @@ version: "3.9"
 
 services:
   # =====================================================================
-  # 1. CORE API GATEWAY SERVICE (RUNNING AS NON-ROOT)
+  # 1. CORE API GATEWAY SERVICE
   # =====================================================================
   backend:
     build: .
@@ -36,7 +36,6 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis-broker:6379/0
-      - HF_TOKEN=${HF_TOKEN} # 🔥 Maps secure HF credentials from your .env
     volumes:
       - chroma_data:/app/chroma_storage
     restart: unless-stopped
@@ -56,18 +55,17 @@ services:
     restart: unless-stopped
 
   # =====================================================================
-  # 3. DISTRIBUTED CELERY ASYNC WORKER POOL (RUNNING AS NON-ROOT)
+  # 3. DISTRIBUTED CELERY ASYNC WORKER POOL
   # =====================================================================
   celery-worker:
     build: .
     container_name: enterprise-rag-worker
-    # Overrides default CMD to execute the celery daemon as appuser
+    # Overrides the default CMD to boot up as a worker listening to our app instance
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
     env_file:
       - .env
     environment:
       - REDIS_URL=redis://redis-broker:6379/0
-      - HF_TOKEN=${HF_TOKEN} # 🔥 Maps secure HF credentials from your .env
     volumes:
       - chroma_data:/app/chroma_storage
     restart: unless-stopped
