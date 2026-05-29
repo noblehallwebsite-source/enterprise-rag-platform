@@ -94,6 +94,7 @@
 #         "filters": filters,
 #         "results": results
 #     }
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -116,8 +117,13 @@ from app.services.security_service import (
 
 from app.tasks.ingestion_tasks import process_document_ingestion
 
+from fastapi import APIRouter, UploadFile, File, HTTPException, status
+from app.tasks.ingestion_tasks import process_uploaded_file
+
 router = APIRouter()
 
+# Keep paths simple matching your workspace working directory layout
+UPLOAD_DIR = "/app/uploads" if os.path.exists("/app") else "uploads"
 
 # =====================================================================
 # 1. STANDARD DOCUMENT INGESTION ROUTE (SYNCHRONOUS / FAST EXECUTION)
@@ -241,4 +247,41 @@ def semantic_search(
         "tenant_id": data.tenant_id,
         "filters": filters,
         "results": results
+    }
+
+
+
+@router.post("/upload")
+async def upload_document(tenant_id: str, file: UploadFile = File(...)):
+    
+    # ==========================================
+    # Save Uploaded File
+    # ==========================================
+    extension = os.path.splitext(file.filename)[1]
+    unique_filename = f"{uuid.uuid4()}{extension}"
+    file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+    try:
+        with open(file_path, "wb") as buffer:
+            buffer.write(await file.read())
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to write file to disk storage: {str(e)}"
+        )
+
+    # ==========================================
+    # Queue Background Processing
+    # ==========================================
+    task = process_uploaded_file.delay(
+        tenant_id=tenant_id,
+        file_path=file_path,
+        metadata={
+            "original_filename": file.filename
+        }
+    )
+
+    return {
+        "message": "File uploaded successfully",
+        "task_id": task.id
     }

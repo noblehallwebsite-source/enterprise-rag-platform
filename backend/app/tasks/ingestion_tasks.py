@@ -4,6 +4,7 @@ import logging
 from app.tasks.celery_app import celery_app
 from app.services.chunking_service import chunk_text
 from app.services.chroma_service import add_document
+from app.services.file_extraction_service import extract_pdf_text, extract_docx_text
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +100,54 @@ def process_document_ingestion(
             f"for tenant_id='{tenant_id}'. Error details: {str(e)}"
         )
         raise e
+
+    
+
+@celery_app.task(name="app.tasks.ingestion_tasks.process_uploaded_file")
+def process_uploaded_file(tenant_id: str, file_path: str, metadata: dict = None):
+    logger.info(f"[WORKER] Processing uploaded file: {file_path} for tenant: {tenant_id}")
+    
+    try:
+        extension = os.path.splitext(file_path)[1].lower()
+
+        # ==========================================
+        # Extract Text
+        # ==========================================
+        if extension == ".pdf":
+            text = extract_pdf_text(file_path)
+        elif extension == ".docx":
+            text = extract_docx_text(file_path)
+        elif extension in [".txt", ".md"]:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+        else:
+            raise Exception(f"Unsupported file type: {extension}")
+
+        # ==========================================
+        # Chunk + Store
+        # ==========================================
+        chunks = chunk_text(text)
+        logger.info(f"[WORKER] Successfully split payload into {len(chunks)} chunks.")
+
+        for chunk in chunks:
+            add_document(
+                tenant_id=tenant_id,
+                document_id=str(uuid.uuid4()),
+                text=chunk,
+                metadata=metadata or {}
+            )
+
+        logger.info(f"[WORKER SUCCESS] Completed compilation sequence for file: {file_path}")
+        return {
+            "status": "completed",
+            "chunks_created": len(chunks)
+        }
+
+    except Exception as e:
+        logger.error(f"[WORKER CRITICAL FAILURE] Execution failed for file {file_path}: {str(e)}")
+        raise e
+    finally:
+        # Clear out the file from the shared volume as root immediately after ingestion completes
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"[WORKER CLEANUP] Removed temporary staging file: {file_path}")

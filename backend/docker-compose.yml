@@ -38,6 +38,7 @@ services:
       - REDIS_URL=redis://redis-broker:6379/0
     volumes:
       - chroma_data:/app/chroma_storage
+      - ./uploads:/app/uploads
     restart: unless-stopped
     depends_on:
       - redis-broker
@@ -68,6 +69,7 @@ services:
       - REDIS_URL=redis://redis-broker:6379/0
     volumes:
       - chroma_data:/app/chroma_storage
+      - ./uploads:/app/uploads
     restart: unless-stopped
     depends_on:
       - redis-broker
