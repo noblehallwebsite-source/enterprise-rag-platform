@@ -2,7 +2,7 @@ import os
 import uuid
 import time
 import logging
-from app.tasks.celery_app import celery_app
+from app.core.celery_app import celery_app  # ✅ ADD This
 from app.services.chunking_service import chunk_text
 from app.services.chroma_service import add_document
 from app.services.file_extraction_service import extract_pdf_text, extract_docx_text

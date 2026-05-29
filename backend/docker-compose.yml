@@ -62,7 +62,7 @@ services:
     build: .
     container_name: enterprise-rag-worker
     # Overrides the default CMD to boot up as a worker listening to our app instance
-    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app.celery_app worker --loglevel=info
     env_file:
       - .env
     environment:

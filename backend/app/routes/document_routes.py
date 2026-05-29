@@ -122,7 +122,7 @@ from app.tasks.ingestion_tasks import (
 )
 
 from celery.result import AsyncResult
-from app.tasks.celery_app import celery_app  # Ensure this points to where celery_app is defined
+from app.core.celery_app import celery_app  # ✅ ADD This
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
