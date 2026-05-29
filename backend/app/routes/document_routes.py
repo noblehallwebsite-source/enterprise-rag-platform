@@ -94,10 +94,9 @@
 #         "filters": filters,
 #         "results": results
 #     }
-
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.models.request_models import (
     DocumentRequest,
@@ -114,19 +113,31 @@ from app.services.chunking_service import (
     chunk_text
 )
 
+# 🔥 Import authorization gateway layer
+from app.services.security_service import (
+    authorize_request
+)
+
 router = APIRouter()
 
 
 # =====================================================================
-# STANDARD DOCUMENT INGESTION ROUTE (TENANT-ISOLATED)
+# STANDARD DOCUMENT INGESTION ROUTE (TENANT-ISOLATED & PROTECTED)
 # =====================================================================
 @router.post("/documents")
 def store_document(
-    data: DocumentRequest
+    data: DocumentRequest,
+    auth: dict = Depends(authorize_request)  # 🔥 Intercepts header credential state
 ):
+    # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
+    if auth["tenant_id"] != data.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The provided API credential token is not authorized to modify this tenant workspace."
+        )
+
     document_id = str(uuid.uuid4())
 
-    # 🔥 Pass tenant_id down to enforce isolation boundary
     add_document(
         tenant_id=data.tenant_id,
         document_id=document_id,
@@ -147,19 +158,25 @@ def store_document(
 
 
 # =====================================================================
-# LARGE DOCUMENT INGESTION ROUTE (TENANT-ISOLATED)
+# LARGE DOCUMENT INGESTION ROUTE (TENANT-ISOLATED & PROTECTED)
 # =====================================================================
 @router.post("/documents/large")
 def store_large_document(
-    data: LargeDocumentRequest
+    data: LargeDocumentRequest,
+    auth: dict = Depends(authorize_request)  # 🔥 Intercepts header credential state
 ):
-    # Using your native chunk_text service package
+    # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
+    if auth["tenant_id"] != data.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The provided API credential token is not authorized to modify this tenant workspace."
+        )
+
     chunks = chunk_text(data.text)
 
     for chunk in chunks:
         chunk_id = str(uuid.uuid4())
 
-        # 🔥 Pass tenant_id down to route each split chunk into the correct collection
         add_document(
             tenant_id=data.tenant_id,
             document_id=chunk_id,
@@ -180,12 +197,20 @@ def store_large_document(
 
 
 # =====================================================================
-# STANDALONE SEMANTIC SEARCH ROUTE (TENANT-ISOLATED)
+# STANDALONE SEMANTIC SEARCH ROUTE (TENANT-ISOLATED & PROTECTED)
 # =====================================================================
 @router.post("/search")
 def semantic_search(
-    data: SearchRequest
+    data: SearchRequest,
+    auth: dict = Depends(authorize_request)  # 🔥 Intercepts header credential state
 ):
+    # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
+    if auth["tenant_id"] != data.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The provided API credential token is not authorized to access this tenant workspace."
+        )
+
     filters = {
         "environment": data.environment,
         "severity": data.severity,
@@ -193,7 +218,6 @@ def semantic_search(
         "service": data.service
     }
 
-    # 🔥 Pass tenant_id to make it mathematically impossible to read another client's vectors
     results = search_documents(
         tenant_id=data.tenant_id,
         query=data.query,

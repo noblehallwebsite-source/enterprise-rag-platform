@@ -67,7 +67,7 @@
 
 #     return result
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.models.request_models import (
     RagQueryRequest
@@ -76,16 +76,30 @@ from app.services.rag_service import (
     run_rag_pipeline,
     run_streaming_rag_pipeline
 )
+from app.services.security_service import (
+    authorize_request
+)
 from app.services.ai_service import client
 
 router = APIRouter()
 
 
 # =====================================================================
-# REAL-TIME STREAMING RAG ROUTE (TENANT-AWARE)
+# REAL-TIME STREAMING RAG ROUTE (WITH CROSS-TENANT VERIFICATION)
 # =====================================================================
 @router.post("/rag/stream")
-def rag_query_stream(data: RagQueryRequest, background_tasks: BackgroundTasks): 
+def rag_query_stream(
+    data: RagQueryRequest, 
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(authorize_request)
+): 
+    # 🔥 STEP 7: ENFORCE STRICT TENANT SECURITY CROSS-CHECK
+    if auth["tenant_id"] != data.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The provided API credential token is not authorized to access this tenant workspace."
+        )
+
     filters = {
         "environment": data.environment,
         "severity": data.severity,
@@ -95,7 +109,7 @@ def rag_query_stream(data: RagQueryRequest, background_tasks: BackgroundTasks):
 
     result = run_streaming_rag_pipeline(
         client=client,
-        tenant_id=data.tenant_id,          # 🔥 Extract and map tenant id
+        tenant_id=data.tenant_id,  # Guaranteed safe by the cross-check guard above
         session_id=data.session_id,
         query=data.query,
         background_tasks=background_tasks, 
@@ -106,10 +120,20 @@ def rag_query_stream(data: RagQueryRequest, background_tasks: BackgroundTasks):
 
 
 # =====================================================================
-# SYNC BACKUP PIPELINE (TENANT-AWARE & CLEANED)
+# SYNC BACKUP PIPELINE (WITH CROSS-TENANT VERIFICATION)
 # =====================================================================
 @router.post("/rag")
-def rag_query(data: RagQueryRequest):
+def rag_query(
+    data: RagQueryRequest,
+    auth: dict = Depends(authorize_request)
+):
+    # 🔥 STEP 7: ENFORCE STRICT TENANT SECURITY CROSS-CHECK
+    if auth["tenant_id"] != data.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The provided API credential token is not authorized to access this tenant workspace."
+        )
+
     filters = {
         "environment": data.environment,
         "severity": data.severity,
@@ -117,9 +141,8 @@ def rag_query(data: RagQueryRequest):
         "service": data.service
     }
 
-    # 🔥 Fixed: Removed the unintentional streaming pipeline duplicate execution here
     result = run_rag_pipeline(
-        tenant_id=data.tenant_id,          # 🔥 Extract and map tenant id
+        tenant_id=data.tenant_id,  # Guaranteed safe by the cross-check guard above
         session_id=data.session_id,
         query=data.query,
         filters=filters
