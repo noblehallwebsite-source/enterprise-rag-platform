@@ -27,8 +27,7 @@ export default function UploadPage() {
             formData.append("tenant_id", "company-a");
             formData.append("file", file);
 
-            // 🛡️ The browser sends a clean request to Next.js.
-            // Next.js middleware catches it on the server and attaches the secret key.
+
             const response = await axios.post("/api/upload", formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",
