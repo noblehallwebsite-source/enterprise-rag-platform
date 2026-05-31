@@ -1,4 +1,3 @@
-// ~/enterprise-rag-platform/frontend/src/app/dashboard/upload/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -19,7 +18,7 @@ export default function UploadPage() {
         if (!file) return;
 
         try {
-            setMessage("Uploading data...");
+            setMessage("Uploading data securely...");
             const formData = new FormData();
             formData.append("tenant_id", "company-a");
             formData.append("file", file);
