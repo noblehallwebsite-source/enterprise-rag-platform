@@ -1,0 +1,59 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches:
+      - main
+
+    paths:
+      - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
+
+jobs:
+
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # =========================================================
+      # 1. CHECKOUT REPOSITORY
+      # =========================================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # =========================================================
+      # 2. CONNECT TO VPS & DEPLOY FRONTEND
+      # =========================================================
+      - name: Deploy Frontend to VPS
+        uses: appleboy/ssh-action@master
+
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+
+          script: |
+            echo "======================================"
+            echo "ENTERPRISE RAG FRONTEND DEPLOYMENT"
+            echo "======================================"
+
+            cd ~/enterprise-rag-platform
+
+            echo "Pulling latest source code..."
+            git pull origin main
+
+            echo "Navigating to frontend workspace..."
+            cd frontend
+
+            echo "Stopping existing frontend containers..."
+            docker compose down
+
+            echo "Building and starting frontend..."
+            docker compose up --build -d
+
+            echo "Cleaning unused Docker artifacts..."
+            docker image prune -f
+
+            echo "Frontend deployment completed successfully."

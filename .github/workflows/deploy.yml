@@ -27,8 +27,8 @@ jobs:
 
             cd backend
 
-            docker compose down
-
             docker compose build
 
-            docker compose up -d
+            # 5. 🔥 Stop old instances and launch new ones in a split-second transition.
+            # Using --remove-orphans cleans up abandoned backend state automatically.
+            docker compose up -d --remove-orphans
