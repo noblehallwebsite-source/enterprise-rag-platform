@@ -22,9 +22,6 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# 👇 IMPORTANT: copy env file into build context
-COPY .env.local ./
-
 COPY . .
 
 RUN npm run build
