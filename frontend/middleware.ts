@@ -11,7 +11,7 @@ export function middleware(request: NextRequest) {
         // 🔒 SECURE SERVER-SIDE INJECTION:
         // Pulls BACKEND_API_KEY from your container's environment variables.
         // Make sure "X-API-Key" matches exactly what your FastAPI authorize_request checks for!
-        requestHeaders.set('X-API-Key', process.env.BACKEND_API_KEY || '');
+        requestHeaders.set('X-API-Key', process.env.BACKEND_TENANT_API_KEY || '');
 
         // Forward the request to Nginx with the secret header safely pinned to it
         return NextResponse.next({
