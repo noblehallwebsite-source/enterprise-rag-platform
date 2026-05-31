@@ -17,18 +17,19 @@ services:
   frontend:
     build:
       context: .
-      args:
-        # 🚀 Pulls from your host VPS .env file and passes it to the Dockerfile at BUILD TIME
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     container_name: enterprise-rag-frontend
     ports:
       - "3000:3000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - enterprise-rag-net
 
     environment:
       # Safe! This is never exposed to the browser. Next.js reads it purely on the server side.
-      - BACKEND_URL: http://127.0.0.1:8000
+      - BACKEND_URL: http://enterprise-rag-backend:8000
       # Removed the global env_file block to keep server secrets isolated
       - BACKEND_API_KEY=${BACKEND_API_KEY}
     restart: unless-stopped
+
+networks:
+  enterprise-rag-net:
+    external: true

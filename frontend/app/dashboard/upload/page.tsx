@@ -9,7 +9,7 @@ export default function UploadPage() {
     const [message, setMessage] = useState("");
     const [mounted, setMounted] = useState(false);
 
-    // Guarantee hydration integrity to eliminate compilation route errors
+    // Eliminates compilation route hydration errors
     useEffect(() => {
         setMounted(true);
     }, []);
@@ -18,28 +18,30 @@ export default function UploadPage() {
         if (!file) return;
 
         try {
-            setMessage("Uploading data securely...");
+            setMessage("Uploading document securely...");
             const formData = new FormData();
             formData.append("tenant_id", "company-a");
             formData.append("file", file);
 
-            // 🚀 Hits your invisible internal Next.js backend proxy route
+            // 🚀 Hits your clean Nginx relative endpoint path. 
+            // No ports, no backend IPs, and no private API keys are ever leaked to browser bundles!
             const response = await axios.post("/api/upload", formData, {
                 headers: {
                     "Content-Type": "multipart/form-data",
                 },
             });
 
+            // Captures the Celery background processing task ID returned by FastAPI
             setTaskId(response.data.task_id);
-            setMessage("Upload accepted.");
-        } catch (error) {
-            console.error(error);
-            setMessage("Upload failed.");
+            setMessage("Upload accepted. Processing pipeline started successfully.");
+        } catch (error: any) {
+            console.error("Upload Event Error:", error);
+            setMessage("Secure upload transaction failed.");
         }
     }
 
     if (!mounted) {
-        return <div className="max-w-xl p-6 font-sans">Initializing platform layers...</div>;
+        return <div className="max-w-xl p-6 font-sans">Initializing security infrastructure...</div>;
     }
 
     return (
@@ -59,7 +61,7 @@ export default function UploadPage() {
                     type="button"
                     className="mt-4 block px-4 py-2 bg-black text-white rounded font-medium transition-opacity hover:opacity-90"
                 >
-                    Upload
+                    Upload Document
                 </button>
             </div>
 
@@ -71,7 +73,7 @@ export default function UploadPage() {
 
             {taskId && (
                 <div className="mt-4 p-4 border border-slate-200 rounded">
-                    <span className="text-sm text-slate-500 font-semibold">Task ID:</span>
+                    <span className="text-sm text-slate-500 font-semibold">Background Task ID:</span>
                     <div className="font-mono bg-slate-50 p-2 text-xs rounded mt-2 break-all border border-slate-100">
                         {taskId}
                     </div>
