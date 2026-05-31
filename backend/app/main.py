@@ -17,6 +17,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# 1. CORS MIDDLEWARE MUST COME FIRST 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # For debugging, allow everything temporarily
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 Instrumentator().instrument(app).expose(app)
 
 app.include_router(document_router)
