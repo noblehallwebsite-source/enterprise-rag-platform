@@ -25,7 +25,7 @@ services:
       - "3000:3000"
     environment:
       # Safe! This is never exposed to the browser. Next.js reads it purely on the server side.
-      - BACKEND_URL=http://164.68.120.179:8000
+      - BACKEND_URL=http://host.docker.internal:8000
       # Removed the global env_file block to keep server secrets isolated
       - BACKEND_API_KEY=${BACKEND_API_KEY}
     restart: unless-stopped
