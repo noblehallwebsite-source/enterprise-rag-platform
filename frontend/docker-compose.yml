@@ -1,16 +1,3 @@
-# version: "3.9"
-
-# services:
-
-#   frontend:
-#     build: .
-#     container_name: enterprise-rag-frontend
-
-#     ports:
-#       - "3000:3000"
-
-#     restart: unless-stopped
-
 version: "3.9"
 
 services:
@@ -18,18 +5,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-
-      # Build-time variables (used during npm run build)
       args:
         BACKEND_URL: ${BACKEND_URL}
         BACKEND_API_KEY: ${BACKEND_API_KEY}
+
+    env_file:
+      - .env
 
     container_name: enterprise-rag-frontend
 
     ports:
       - "3000:3000"
 
-    # Runtime variables (used by Next.js API routes)
     environment:
       BACKEND_URL: ${BACKEND_URL}
       BACKEND_API_KEY: ${BACKEND_API_KEY}
