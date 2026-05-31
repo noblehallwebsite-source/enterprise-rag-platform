@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    # 🔥 ADD THIS FILTER BLOCK TO ISOLATE THE BACKEND
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml" # Ensure this matches your actual backend filename
 
 jobs:
 
