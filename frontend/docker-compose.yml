@@ -1,12 +1,28 @@
+# version: "3.9"
+
+# services:
+
+#   frontend:
+#     build: .
+#     container_name: enterprise-rag-frontend
+
+#     ports:
+#       - "3000:3000"
+
+#     restart: unless-stopped
+
 version: "3.9"
 
 services:
-
   frontend:
     build: .
+
     container_name: enterprise-rag-frontend
 
     ports:
       - "3000:3000"
+
+    env_file:
+      - .env.local
 
     restart: unless-stopped
