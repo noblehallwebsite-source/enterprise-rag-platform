@@ -3,22 +3,12 @@ version: "3.9"
 services:
   frontend:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile
-      args:
-        BACKEND_URL: ${BACKEND_URL}
-        BACKEND_API_KEY: ${BACKEND_API_KEY}
-
-    env_file:
-      - .env
 
     container_name: enterprise-rag-frontend
 
     ports:
       - "3000:3000"
-
-    environment:
-      BACKEND_URL: ${BACKEND_URL}
-      BACKEND_API_KEY: ${BACKEND_API_KEY}
 
     restart: unless-stopped
