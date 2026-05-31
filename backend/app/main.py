@@ -12,15 +12,24 @@ from app.routes.rag_routes import (
     router as rag_router
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Enterprise RAG Platform",
     version="1.0.0"
 )
 
-# 1. CORS MIDDLEWARE MUST COME FIRST 
+# Your origins configuration
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://ai.noblehall.com",
+]
+
+# The middleware assignment block
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # For debugging, allow everything temporarily
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
