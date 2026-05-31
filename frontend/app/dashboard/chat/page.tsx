@@ -18,7 +18,23 @@ export default function ChatPage() {
         if (existingSession) {
             setSessionId(existingSession);
         } else {
-            const newSessionId = crypto.randomUUID();
+            let newSessionId = "";
+
+            try {
+                // 🔒 Primary secure execution hook (Works perfectly on Localhost and HTTPS)
+                if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
+                    newSessionId = window.crypto.randomUUID();
+                }
+            } catch (e) {
+                console.warn("Crypto API not available, switching to fallback identification.");
+            }
+
+            // 🛡️ Fallback execution hook (Ensures raw HTTP public IPs don't crash)
+            if (!newSessionId) {
+                newSessionId = 'session-' + Math.random().toString(36).substring(2, 15) +
+                    Math.random().toString(36).substring(2, 15);
+            }
+
             localStorage.setItem("rag_chat_session_id", newSessionId);
             setSessionId(newSessionId);
         }
@@ -31,7 +47,7 @@ export default function ChatPage() {
         setAnswer(""); // Flush state for clean incoming tokens
 
         try {
-            // 🚀 FIXED PATH: Maps past Nginx straight to your FastAPI @router.post("/rag/stream")
+            // 🚀 Passes past Nginx straight to your FastAPI @router.post("/rag/stream")
             const response = await fetch("/api/rag/stream", {
                 method: "POST",
                 headers: {
@@ -137,7 +153,7 @@ export default function ChatPage() {
                         <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.3s]" />
                         <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.15s]" />
                         <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" />
-                        Receiving live LLM token buffers!
+                        Receiving live LLM token buffers
                     </div>
                 )}
             </div>
