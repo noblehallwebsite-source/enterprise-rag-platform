@@ -27,7 +27,7 @@ app.include_router(rag_router)
 def root():
 
     return {
-        "message": "Enterprise RAG Platform Running"
+        "message": "Enterprise RAG Platform Running Correctly"
     }
 
 
