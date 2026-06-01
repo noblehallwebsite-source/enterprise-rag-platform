@@ -387,7 +387,8 @@ from app.database.dependencies import (
     get_db
 )
 from app.services.document_service import (
-    create_document
+    create_document,
+    get_documents
 )
 
 from app.tasks.ingestion_tasks import (
