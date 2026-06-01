@@ -90,9 +90,10 @@ services:
     container_name: enterprise-rag-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: rag_admin
-      POSTGRES_PASSWORD: R@gP0stgr3sS3cr3t!
-      POSTGRES_DB: enterprise_rag_db
+      # 🔒 Docker Compose automatically reads these right out of your .env file
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-enterprise_rag}
     ports:
       - "127.0.0.1:5432:5432" # Bound securely to localhost
     volumes:
