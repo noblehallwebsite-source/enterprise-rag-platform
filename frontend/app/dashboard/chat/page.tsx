@@ -9,19 +9,18 @@ export default function ChatPage() {
     const [sessionId, setSessionId] = useState("");
     const [mounted, setMounted] = useState(false);
 
-    // Safely initialize session tracking state within client context layer
+    // Filter States to prevent vector space contamination
+    const [selectedService, setSelectedService] = useState<string | null>(null);
+    const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
+
     useEffect(() => {
         setMounted(true);
-
-        // Grabs or initializes the user conversational session state
         const existingSession = localStorage.getItem("rag_chat_session_id");
         if (existingSession) {
             setSessionId(existingSession);
         } else {
             let newSessionId = "";
-
             try {
-                // 🔒 Primary secure execution hook (Works perfectly on Localhost and HTTPS)
                 if (typeof window !== "undefined" && window.crypto && window.crypto.randomUUID) {
                     newSessionId = window.crypto.randomUUID();
                 }
@@ -29,12 +28,10 @@ export default function ChatPage() {
                 console.warn("Crypto API not available, switching to fallback identification.");
             }
 
-            // 🛡️ Fallback execution hook (Ensures raw HTTP public IPs don't crash)
             if (!newSessionId) {
                 newSessionId = 'session-' + Math.random().toString(36).substring(2, 15) +
                     Math.random().toString(36).substring(2, 15);
             }
-
             localStorage.setItem("rag_chat_session_id", newSessionId);
             setSessionId(newSessionId);
         }
@@ -44,10 +41,9 @@ export default function ChatPage() {
         if (!question.trim()) return;
 
         setLoading(true);
-        setAnswer(""); // Flush state for clean incoming tokens
+        setAnswer("");
 
         try {
-            // 🚀 Passes past Nginx straight to your FastAPI @router.post("/rag/stream")
             const response = await fetch("/api/rag/stream", {
                 method: "POST",
                 headers: {
@@ -55,12 +51,13 @@ export default function ChatPage() {
                 },
                 body: JSON.stringify({
                     tenant_id: "company-a",
-                    session_id: sessionId, // Dynamic user isolation token instance
+                    session_id: sessionId,
                     query: question,
-                    environment: null,
+                    // 🚀 DYNAMIC METADATA FILTERS: Forces ChromaDB to strictly isolate documents
+                    environment: selectedEnv,
                     severity: null,
                     source: null,
-                    service: null,
+                    service: selectedService,
                 }),
             });
 
@@ -68,32 +65,34 @@ export default function ChatPage() {
                 throw new Error("Target infrastructure failed to initialize streaming reader payload.");
             }
 
-            // Initialize the lower-level chunk binary processing layout
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let fullText = "";
 
-            // Stream evaluation processing loop
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                // Decode binary raw packet array chunk bytes to plain text tokens
                 const chunk = decoder.decode(value, { stream: true });
                 fullText += chunk;
-
-                // Force react interface to draw incremental strings frame-by-frame
                 setAnswer(fullText);
             }
         } catch (error) {
             console.error("Streaming Transaction Failure:", error);
-            setAnswer("An infrastructure error occurred while streaming contextual generation. Check terminal logs.");
+            setAnswer("An infrastructure error occurred while streaming contextual generation.");
         } finally {
             setLoading(false);
         }
     }
 
-    // Prevents Next.js layout compilation flickering due to localStorage checks
+    function resetConversation() {
+        const newId = 'session-' + Math.random().toString(36).substring(2, 15);
+        localStorage.setItem("rag_chat_session_id", newId);
+        setSessionId(newId);
+        setAnswer("");
+        setQuestion("");
+    }
+
     if (!mounted) {
         return (
             <div className="max-w-5xl p-6 font-sans">
@@ -109,15 +108,55 @@ export default function ChatPage() {
             <div className="flex items-center justify-between mb-2">
                 <h1 className="text-3xl font-bold tracking-tight text-slate-900">AI Knowledge Assistant</h1>
 
-                {/* Active Session Badge indicator */}
-                <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="font-mono" title={sessionId}>Session: {sessionId.slice(0, 8)}...</span>
+                <div className="flex items-center gap-3">
+                    {/* Reset button to clear memory quickly */}
+                    <button
+                        onClick={resetConversation}
+                        className="text-xs text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 px-2.5 py-1 rounded-md transition-colors font-medium"
+                    >
+                        🔄 Reset Chat Memory
+                    </button>
+
+                    <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="font-mono">Session: {sessionId.slice(0, 8)}...</span>
+                    </div>
                 </div>
             </div>
             <p className="text-sm text-slate-500 mb-6">
                 Interact with contextual memory architectures synced natively with your document vectors.
             </p>
+
+            {/* 🛠️ NEW: META DATA FILTER WORKSPACE BAR */}
+            <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-wrap items-center gap-4 text-xs">
+                <span className="font-semibold text-slate-500 uppercase tracking-wider">Target Scope Filters:</span>
+
+                {/* Service Filter dropdown */}
+                <div className="flex items-center gap-1.5">
+                    <label className="text-slate-600 font-medium">Service:</label>
+                    <select
+                        className="bg-white border border-slate-300 rounded px-2 py-1 focus:outline-none focus:border-black"
+                        onChange={(e) => setSelectedService(e.target.value || null)}
+                    >
+                        <option value="">All Services (No Filtering)</option>
+                        <option value="kubernetes">Kubernetes Logs</option>
+                        <option value="hr-docs">HR / Internal Documents</option>
+                    </select>
+                </div>
+
+                {/* Environment Filter dropdown */}
+                <div className="flex items-center gap-1.5">
+                    <label className="text-slate-600 font-medium">Environment:</label>
+                    <select
+                        className="bg-white border border-slate-300 rounded px-2 py-1 focus:outline-none focus:border-black"
+                        onChange={(e) => setSelectedEnv(e.target.value || null)}
+                    >
+                        <option value="">All Environments</option>
+                        <option value="production">Production Only</option>
+                        <option value="staging">Staging Only</option>
+                    </select>
+                </div>
+            </div>
 
             {/* Input Group Block Layout */}
             <div className="flex gap-3 bg-slate-50 p-4 border border-slate-200 rounded-lg shadow-sm">
