@@ -230,6 +230,7 @@ def process_document_ingestion(
             # Inject trace parameters into object metadata dictionary
             enriched_metadata = {
                 **metadata,
+                "document_id": task_id,  # For standalone text ingestion, the parent identifier is the task_id
                 "chunk_index": idx,
                 "parent_task_id": task_id
             }
@@ -319,15 +320,18 @@ def process_uploaded_file(
         # ==========================================
         # 3. Vector DB Target Load Loop
         # ==========================================
-        for chunk in chunks:
+        for idx, chunk in enumerate(chunks):
+            chunk_metadata = {
+                **(metadata or {}),
+                "document_id": document_id,
+                "chunk_index": idx
+            }
+
             add_document(
                 tenant_id=tenant_id,
                 document_id=str(uuid.uuid4()),
                 text=chunk,
-                metadata={
-                    **(metadata or {}),
-                    "parent_document_id": document_id
-                }
+                metadata=chunk_metadata
             )
 
         # 🎉 Success Update Matrix

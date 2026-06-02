@@ -374,7 +374,8 @@ from app.models.request_models import (
 
 from app.services.chroma_service import (
     add_document,
-    search_documents
+    search_documents,
+    delete_document_chunks  # 🔑 Imported vector deletion service tool
 )
 
 # 🔥 Import authorization gateway layer
@@ -388,7 +389,8 @@ from app.database.dependencies import (
 )
 from app.services.document_service import (
     create_document,
-    get_documents
+    get_documents,
+    delete_document        # 🔑 Imported database eviction layout tool
 )
 
 from app.tasks.ingestion_tasks import (
@@ -398,6 +400,7 @@ from app.tasks.ingestion_tasks import (
 
 from celery.result import AsyncResult
 from app.core.celery_app import celery_app
+from app.models.document import Document # Directly imported for path query filtering logic
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -434,7 +437,9 @@ def store_document(
             "source": data.source,
             "environment": data.environment,
             "severity": data.severity,
-            "service": data.service
+            "service": data.service,
+            "document_id": document_id,
+            "chunk_index": 0
         }
     )
 
@@ -668,3 +673,59 @@ def list_documents(
     )
 
     return documents
+
+
+# =====================================================================
+# 6. DELETE DOCUMENT ROUTE (CASCADING RELATIONAL & VECTOR PURGE ENGINE)
+# =====================================================================
+@router.delete("/documents/{document_id}", status_code=status.HTTP_200_OK)
+def remove_document(
+    document_id: str,
+    auth: dict = Depends(authorize_request),
+    db: Session = Depends(get_db)
+):
+    """
+    Performs validation checking on target records, wipes all matching chunk vector spaces 
+    inside ChromaDB, drops the relational row inside PostgreSQL, and cleanly reports completion.
+    """
+    # 1. Fetch document out of the database workspace
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id)
+        .first()
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target document record not found in system database registry."
+        )
+
+    # 2. Enforce strict multi-tenant privacy verification
+    if document.tenant_id != auth["tenant_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Unprivileged access request to protected multi-tenant data asset blocks."
+        )
+
+    # 3. Drop all dependent vector pieces out of ChromaDB
+    try:
+        delete_document_chunks(
+            tenant_id=document.tenant_id,
+            document_id=document_id
+        )
+    except Exception as vector_err:
+        logger.error(f"[CRITICAL API ERROR] Failed to drop vectors from ChromaDB: {str(vector_err)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to cleanly remove document segments from vector database indexing collections."
+        )
+
+    # 4. Drop reference row tracking manifest registry from Postgres
+    delete_document(db=db, document_id=document_id)
+
+    return {
+        "message": "Document record and related vector index mappings evicted successfully.",
+        "document_id": document_id,
+        "tenant_id": document.tenant_id
+    }

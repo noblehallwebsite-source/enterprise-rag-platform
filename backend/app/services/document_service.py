@@ -67,3 +67,24 @@ def get_documents(
         .order_by(Document.created_at.desc())
         .all()
     )
+
+
+# =====================================================================
+# ADDED: POSTGRESQL RECORD RECORD DELETION
+# =====================================================================
+def delete_document(db: Session, document_id: str) -> Document | None:
+    """
+    Removes the document index metadata row permanently from Postgres.
+    """
+    document = (
+        db.query(Document)
+        .filter(Document.id == document_id)
+        .first()
+    )
+
+    if not document:
+        return None
+
+    db.delete(document)
+    db.commit()
+    return document

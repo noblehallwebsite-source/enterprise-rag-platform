@@ -83,6 +83,10 @@
 
 #     return formatted_results
 
+
+
+
+
 import chromadb
 from chromadb.config import Settings
 
@@ -203,3 +207,19 @@ def search_documents(
         })
 
     return formatted_results
+
+
+# =====================================================================
+# ADDED: CHROMA VECTOR PURGE ENGINE
+# =====================================================================
+def delete_document_chunks(tenant_id: str, document_id: str):
+    """
+    Deletes all vector fragments tied to a specific parent document
+    from the target tenant's isolated collection workspace.
+    """
+    collection = get_tenant_collection(tenant_id)
+    collection.delete(
+        where={
+            "document_id": str(document_id)
+        }
+    )
