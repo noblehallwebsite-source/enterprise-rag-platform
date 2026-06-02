@@ -29,7 +29,13 @@ export async function createChatSession(title: string): Promise<ChatSessionPaylo
         headers: SECURITY_HEADERS,
         body: JSON.stringify({ title }),
     });
-    if (!response.ok) throw new Error("Failed to spin up backend chat thread record.");
+
+    if (!response.ok) {
+        // Capture validation errors, CORS errors, or routing failures directly from FastAPI
+        const textError = await response.text();
+        console.error(`🔴 [Chat Session Failure] Status: ${response.status} | Payload:`, textError);
+        throw new Error(`Failed to spin up backend chat thread record. Status: ${response.status}`);
+    }
     return response.json();
 }
 
