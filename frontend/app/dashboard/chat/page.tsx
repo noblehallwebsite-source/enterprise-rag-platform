@@ -2,7 +2,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import axios from "axios";
+import {
+    createChatSession,
+    fetchAllSessions,
+    fetchSessionHistory,
+    ChatSessionPayload
+} from "@/services/chat";
 
 interface Message {
     role: "user" | "assistant";
@@ -13,90 +18,105 @@ export default function ChatPage() {
     const [question, setQuestion] = useState("");
     const [messages, setMessages] = useState<Message[]>([]);
     const [loading, setLoading] = useState(false);
-    const [sessionId, setSessionId] = useState("");
-    const [historySessions, setHistorySessions] = useState<string[]>([]);
     const [mounted, setMounted] = useState(false);
 
-    // Filter States to prevent vector space contamination
+    // SQL Database Session Tracking States
+    const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+    const [sessionsList, setSessionsList] = useState<ChatSessionPayload[]>([]);
+    const [loadingSessions, setLoadingSessions] = useState(true);
+
+    // Observability Vector Filter Flags
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
 
-    // Common security authorization context config block
-    const GATEWAY_HEADERS = {
-        "Content-Type": "application/json",
-        "x-api-key": "dev-key-company-a" // Enforces secure platform validation
-    };
-
-    // 1. Core Lifecycle Initialization
+    // 1. Initial Sync Hook: Sync historical list from PostgreSQL database
     useEffect(() => {
         setMounted(true);
-
-        const savedSessionsJson = localStorage.getItem("rag_all_sessions");
-        let sessionsList: string[] = savedSessionsJson ? JSON.parse(savedSessionsJson) : [];
-
-        const activeSession = localStorage.getItem("rag_chat_session_id");
-
-        if (activeSession) {
-            setSessionId(activeSession);
-            if (!sessionsList.includes(activeSession)) {
-                sessionsList.unshift(activeSession);
-            }
-        } else {
-            const newSessionId = "session-" + Math.random().toString(36).substring(2, 15);
-            localStorage.setItem("rag_chat_session_id", newSessionId);
-            setSessionId(newSessionId);
-            sessionsList.unshift(newSessionId);
-        }
-
-        localStorage.setItem("rag_all_sessions", JSON.stringify(sessionsList));
-        setHistorySessions(sessionsList);
-    }, []);
-
-    // 2. Fetch Chat History from Backend when Session Changes
-    useEffect(() => {
-        if (!sessionId) return;
-
-        async function fetchSessionHistory() {
+        async function syncThreadHistoryRegistry() {
             try {
-                // Injects standard API authentication token structure to past logs query loop
-                const response = await axios.get(`/api/chat/history/${sessionId}`, {
-                    headers: { "x-api-key": "dev-key-company-a" }
-                });
-                if (response.data && response.data.messages) {
-                    setMessages(response.data.messages);
-                } else {
-                    setMessages([]);
+                const records = await fetchAllSessions();
+                setSessionsList(records);
+
+                // Fallback: Default directly to the most recent thread item if it exists
+                if (records.length > 0) {
+                    setActiveSessionId(records[0].id);
                 }
             } catch (err) {
-                console.warn("Backend chat history lookup bypassed or unconfigured for active token sandbox. Initializing empty history.");
+                console.error("Relational session sync operational failure:", err);
+            } finally {
+                setLoadingSessions(false);
+            }
+        }
+        syncThreadHistoryRegistry();
+    }, []);
+
+    // 2. Thread Selection Sync Hook: Pull individual message logs when activeSessionId updates
+    useEffect(() => {
+        // Guard clause handles the null state immediately
+        if (!activeSessionId) {
+            setMessages([]);
+            return;
+        }
+
+        // Local variable assignment isolates type context to strictly a string, 
+        // satisfying TypeScript's strict null checking control flow.
+        const sessionId: string = activeSessionId;
+
+        async function syncMessageChainLogs() {
+            try {
+                const logData = await fetchSessionHistory(sessionId);
+                setMessages(logData.messages);
+            } catch (err) {
+                console.error("Could not retrieve session interaction context blocks:", err);
                 setMessages([]);
             }
         }
+        syncMessageChainLogs();
+    }, [activeSessionId]);
 
-        fetchSessionHistory();
-    }, [sessionId]);
-
-    // 3. Handle Streaming Response
+    // 3. Orchestrate Conversational Stream Interaction
     async function askQuestion() {
         if (!question.trim() || loading) return;
+
+        let targetSessionId = activeSessionId;
+
+        // Lazy-Initialization Guard: If a user types directly into an empty canvas screen, 
+        // dynamically generate the underlying database session record first!
+        if (!targetSessionId) {
+            try {
+                setLoading(true);
+                const generatedTitle = question.length > 25 ? `${question.slice(0, 25)}...` : question;
+                const newSession = await createChatSession(generatedTitle);
+                setSessionsList(prev => [newSession, ...prev]);
+                targetSessionId = newSession.id;
+                setActiveSessionId(newSession.id);
+            } catch (err) {
+                console.error("Aborting stream: Auto-thread record instantiation failed:", err);
+                alert("Failed to initialize conversational workspace environment context row.");
+                setLoading(false);
+                return;
+            }
+        }
 
         const userMessage: Message = { role: "user", content: question };
         setMessages((prev) => [...prev, userMessage]);
         setQuestion("");
         setLoading(true);
 
-        // Prepare a blank slot in the array for the upcoming live text streaming tokens
+        // Prep downstream slot for upcoming streaming chunk additions
         setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
         try {
             const response = await fetch("/api/rag/stream", {
                 method: "POST",
-                headers: GATEWAY_HEADERS,
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-api-key": "dev-key-company-a"
+                },
                 body: JSON.stringify({
                     tenant_id: "company-a",
-                    session_id: sessionId,
+                    session_id: targetSessionId, // Links embedding response chains cleanly into SQL foreign keys
                     query: userMessage.content,
-                    // Map parameters dynamically to support ChromaDB indexing type validation blocks
                     environment: selectedEnv || "",
                     severity: "",
                     source: "",
@@ -104,11 +124,8 @@ export default function ChatPage() {
                 }),
             });
 
-            if (!response.ok) {
-                throw new Error(`HTTP Stream Initialization Aborted: Status ${response.status}`);
-            }
-
-            if (!response.body) throw new Error("Failed to initialize stream reader engine.");
+            if (!response.ok) throw new Error(`Inference engine endpoint returned status error: ${response.status}`);
+            if (!response.body) throw new Error("Network architecture failed to allocate text-stream reader layer.");
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -121,7 +138,6 @@ export default function ChatPage() {
                 const chunk = decoder.decode(value, { stream: true });
                 fullAssistantText += chunk;
 
-                // Dynamically update ONLY the last item in the message log array (the assistant response)
                 setMessages((prev) => {
                     const updated = [...prev];
                     if (updated.length > 0) {
@@ -131,35 +147,21 @@ export default function ChatPage() {
                 });
             }
         } catch (error) {
-            console.error("Streaming Transaction Failure:", error);
+            console.error("Streaming Generation Error Stack:", error);
             setMessages((prev) => [
                 ...prev.slice(0, -1),
-                { role: "assistant", content: "An operational fault occurred while attempting to stream contextual inference content." }
+                { role: "assistant", content: "An structural fault occurred while recording streaming inference data output blocks." }
             ]);
         } finally {
             setLoading(false);
         }
     }
 
-    // 4. Spawns a completely new conversation thread
+    // 4. Client Explicit Trigger: Instantly reset view layout parameters for a fresh thread
     function startNewChat() {
-        const newId = "session-" + Math.random().toString(36).substring(2, 15);
-        localStorage.setItem("rag_chat_session_id", newId);
-
-        const updatedSessions = [newId, ...historySessions];
-        localStorage.setItem("rag_all_sessions", JSON.stringify(updatedSessions));
-
-        setHistorySessions(updatedSessions);
-        setSessionId(newId);
+        setActiveSessionId(null);
         setMessages([]);
         setQuestion("");
-    }
-
-    // 5. Switch Active Conversational Line Context
-    function switchSession(id: string) {
-        if (loading) return; // Prevent navigation lock during active mutations
-        localStorage.setItem("rag_chat_session_id", id);
-        setSessionId(id);
     }
 
     if (!mounted) {
@@ -173,116 +175,129 @@ export default function ChatPage() {
     return (
         <div className="flex h-[calc(100vh-4rem)] max-w-7xl mx-auto border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm font-sans">
 
-            {/* LEFT SIDEBAR: ChatGPT Conversational History Register */}
+            {/* LEFT SIDEBAR: Relational Thread History Navigation panel */}
             <div className="w-64 bg-slate-900 text-slate-200 flex flex-col p-4 border-r border-slate-800">
                 <button
                     onClick={startNewChat}
-                    disabled={loading}
-                    className="w-full py-2.5 px-4 mb-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2"
+                    disabled={loading || (activeSessionId === null && messages.length === 0)}
+                    className="w-full py-2.5 px-4 mb-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-white text-sm font-medium rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
                 >
                     ➕ New Chat
                 </button>
 
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 block px-2">
-                    Past Conversations
+                    Persistent History
                 </span>
 
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 select-none">
-                    {historySessions.map((id) => (
-                        <div
-                            key={id}
-                            onClick={() => switchSession(id)}
-                            className={`p-2.5 rounded-md text-xs font-mono cursor-pointer truncate transition-all ${id === sessionId
-                                ? "bg-slate-800 text-white font-semibold shadow-inner border border-slate-700"
-                                : "text-slate-400 hover:bg-slate-850 hover:text-slate-200"
-                                } ${loading ? "pointer-events-none opacity-60" : ""}`}
-                            title={id}
-                        >
-                            💬 {id.slice(0, 16)}...
-                        </div>
-                    ))}
+                    {loadingSessions ? (
+                        <div className="p-3 text-xs text-slate-500 italic animate-pulse">Syncing thread rows...</div>
+                    ) : sessionsList.length === 0 ? (
+                        <div className="p-3 text-xs text-slate-500 italic">No historical entries stored.</div>
+                    ) : (
+                        sessionsList.map((session) => {
+                            const isCurrent = session.id === activeSessionId;
+                            return (
+                                <div
+                                    key={session.id}
+                                    onClick={() => !loading && setActiveSessionId(session.id)}
+                                    className={`p-2.5 rounded-md text-xs cursor-pointer truncate transition-all border ${isCurrent
+                                        ? "bg-slate-800 text-white font-semibold border-slate-700 shadow-inner"
+                                        : "text-slate-400 hover:bg-slate-850 hover:text-slate-200 border-transparent"
+                                        } ${loading ? "pointer-events-none opacity-60" : ""}`}
+                                    title={session.title}
+                                >
+                                    💬 {session.title}
+                                </div>
+                            );
+                        })
+                    )}
                 </div>
             </div>
 
-            {/* RIGHT MAIN CHAT SCREEN MONITOR */}
+            {/* RIGHT MAIN WORKSPACE CONSOLE MONITOR */}
             <div className="flex-1 flex flex-col bg-slate-50">
 
-                {/* Top Operational Telemetry Dashboard Bar */}
-                <div className="p-4 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
+                {/* Top Operational Telemetry Filter Toolbar */}
+                <div className="p-4 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-4 shadow-xs">
                     <div className="flex items-center gap-4 text-xs">
                         <div className="flex items-center gap-1.5">
-                            <label className="text-slate-500 font-medium">Service:</label>
+                            <label className="text-slate-500 font-medium">Vector Space Scope:</label>
                             <select
-                                className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:border-slate-400"
+                                className="bg-slate-50 border border-slate-200 rounded px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:border-slate-400"
                                 onChange={(e) => setSelectedService(e.target.value || null)}
                                 disabled={loading}
                             >
-                                <option value="">All Services</option>
-                                <option value="kubernetes">Kubernetes Logs</option>
-                                <option value="hr-docs">HR / Internal Documents</option>
+                                <option value="">All Scopes</option>
+                                <option value="kubernetes">Cluster Logs Container</option>
+                                <option value="hr-docs">Internal Assets Docs</option>
                             </select>
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                            <label className="text-slate-500 font-medium">Env:</label>
+                            <label className="text-slate-500 font-medium">Env Context:</label>
                             <select
-                                className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:border-slate-400"
+                                className="bg-slate-50 border border-slate-200 rounded px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:border-slate-400"
                                 onChange={(e) => setSelectedEnv(e.target.value || null)}
                                 disabled={loading}
                             >
                                 <option value="">All Environments</option>
-                                <option value="production">Production Only</option>
-                                <option value="staging">Staging Only</option>
+                                <option value="production">Production Workloads</option>
+                                <option value="staging">Staging Sandbox</option>
                             </select>
                         </div>
                     </div>
 
-                    <div className="text-[11px] text-slate-400 font-mono bg-slate-50 border border-slate-100 px-2 py-0.5 rounded">
-                        ID: {sessionId}
+                    <div className="text-[10px] text-slate-400 font-mono bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-md shadow-inner">
+                        THREAD: {activeSessionId ? activeSessionId.slice(0, 8) : "UNSAVED_CANVAS"}
                     </div>
                 </div>
 
-                {/* Message Thread Stream Wrapper */}
+                {/* Main Message Thread Timeline Stream */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                     {messages.length === 0 ? (
-                        <div className="h-full flex items-center justify-center text-slate-400 text-sm italic">
-                            Awaiting query parameters initialization... Ask a question below.
+                        <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
+                            <div className="text-2xl">🧠</div>
+                            <div className="italic font-medium">Enterprise Knowledge Engine Ready</div>
+                            <div className="text-xs text-slate-400 max-w-sm text-center">
+                                Submit a question regarding infrastructure telemetry data. The execution context will instantly be bound to a persistent database session thread tracking log.
+                            </div>
                         </div>
                     ) : (
                         messages.map((msg, idx) => (
                             <div
                                 key={idx}
-                                className={`max-w-3xl p-4 rounded-xl text-sm leading-relaxed ${msg.role === "user"
-                                    ? "bg-slate-900 text-white ml-auto rounded-br-none shadow-sm"
-                                    : "bg-white border border-slate-200 text-slate-800 mr-auto rounded-bl-none shadow-xs"
+                                className={`max-w-3xl p-4 rounded-xl text-sm leading-relaxed border transition-all ${msg.role === "user"
+                                    ? "bg-slate-900 text-white ml-auto rounded-br-none border-slate-950 shadow-sm"
+                                    : "bg-white text-slate-800 mr-auto rounded-bl-none border-slate-200/80 shadow-xs"
                                     }`}
                             >
-                                <span className="block text-[10px] uppercase font-bold tracking-wider mb-1 opacity-40">
-                                    {msg.role === "user" ? "You" : "AI Knowledge Engine"}
+                                <span className="block text-[9px] uppercase font-bold tracking-wider mb-1.5 opacity-40">
+                                    {msg.role === "user" ? "Infrastructure Engineer" : "System Cognition Core"}
                                 </span>
-                                <div className="whitespace-pre-wrap">{msg.content}</div>
+                                <div className="whitespace-pre-wrap font-sans leading-relaxed">{msg.content}</div>
                             </div>
                         ))
                     )}
                 </div>
 
-                {/* Dynamic Input Bar Panel Layout */}
-                <div className="p-4 bg-white border-t border-slate-200">
+                {/* Input Control Interface */}
+                <div className="p-4 bg-white border-t border-slate-200 shadow-md">
                     <div className="flex gap-3 max-w-4xl mx-auto">
                         <input
                             value={question}
                             onChange={(e) => setQuestion(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && askQuestion()}
-                            placeholder={loading ? "Generating answers from cluster embeddings..." : "Ask a question concerning your enterprise infrastructure logs..."}
-                            className="border border-slate-300 rounded-lg p-3 flex-1 text-sm bg-slate-50 focus:outline-none focus:bg-white focus:border-slate-900 transition-all disabled:opacity-60"
+                            placeholder={loading ? "Extracting context chunks and evaluating prompt parameters..." : "Query cluster log distributions or enterprise security architectures..."}
+                            className="border border-slate-300 rounded-lg p-3.5 flex-1 text-sm bg-slate-50 focus:outline-none focus:bg-white focus:border-slate-900 transition-all disabled:opacity-60"
                             disabled={loading}
                         />
                         <button
                             onClick={askQuestion}
                             disabled={loading || !question.trim()}
-                            className="px-6 py-3 bg-black text-white text-sm font-medium rounded-lg shadow hover:bg-slate-800 transition-colors disabled:opacity-45"
+                            className="px-6 py-3.5 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-lg shadow transition-all disabled:opacity-40 disabled:hover:bg-slate-900"
                         >
-                            {loading ? "Thinking..." : "Ask"}
+                            {loading ? "Thinking..." : "Ask Core"}
                         </button>
                     </div>
                 </div>
