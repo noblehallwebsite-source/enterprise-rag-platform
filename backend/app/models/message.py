@@ -16,7 +16,7 @@ class Message(Base):
         UUID(as_uuid=True),
         ForeignKey(
             "chat_sessions.id",
-            ondelete="CASCADE"
+            ondelete="CASCADE"  # Automatically purges messages if a thread is deleted
         ),
         nullable=False,
         index=True

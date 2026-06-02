@@ -15,7 +15,7 @@ class ChatSession(Base):
     tenant_id = Column(
         String,
         nullable=False,
-        index=True  # Optimized for tenant-isolated lookups
+        index=True  # Optimizes high-throughput workspace lookups
     )
     title = Column(
         String,

@@ -6,16 +6,15 @@ from app.database.dependencies import get_db
 from app.services.security_service import authorize_request
 from app.services.chat_service import (
     create_chat_session,
-    save_message,
     get_sessions,
     get_messages
 )
 
 router = APIRouter()
 
-# Input Validation Contracts
+# Simple request validation block for payload mapping
 class SessionCreateRequest(BaseModel):
-    title: string
+    title: str
 
 @router.post("/chat/sessions", status_code=status.HTTP_201_CREATED)
 def initialize_session(
@@ -23,7 +22,9 @@ def initialize_session(
     auth: dict = Depends(authorize_request),
     db: Session = Depends(get_db)
 ):
-    """Creates a persistent session context under the active tenant's workspace."""
+    """
+    Spawns a persistent conversation thread assigned to the authenticated workspace context.
+    """
     session = create_chat_session(
         db=db,
         tenant_id=auth["tenant_id"],
@@ -40,7 +41,9 @@ def list_sessions(
     auth: dict = Depends(authorize_request),
     db: Session = Depends(get_db)
 ):
-    """Retrieves chronological history titles matching the verified credentials context."""
+    """
+    Lists historical session summaries available inside the isolated organization scope.
+    """
     sessions = get_sessions(db=db, tenant_id=auth["tenant_id"])
     return [
         {
@@ -56,26 +59,28 @@ def session_messages(
     auth: dict = Depends(authorize_request),
     db: Session = Depends(get_db)
 ):
-    """Returns chronologically ordered messages from a specific session after checking tenant access."""
-    # Fetch first message or session directly to verify tenant ownership
-    messages = get_messages(db=db, session_id=session_id)
-    
-    # Simple verification logic: find matching parent session tracking metadata
+    """
+    Fetches the historical message ledger tracking entries for a requested thread ID.
+    Enforces cross-tenant protection checks.
+    """
     from app.models.chat_session import ChatSession
+    
+    # Verify existence and multi-tenant isolation context matching
     session_record = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     
     if not session_record:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="The specified chat thread session could not be resolved."
+            detail="The requested chat session thread could not be located."
         )
         
     if session_record.tenant_id != auth["tenant_id"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access Denied: Unprivileged multi-tenant organizational space partition."
+            detail="Access Denied: The security credentials provided are restricted from accessing this session data."
         )
 
+    messages = get_messages(db=db, session_id=session_id)
     return {
         "session_id": session_id,
         "messages": [

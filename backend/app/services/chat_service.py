@@ -4,7 +4,10 @@ from app.models.chat_session import ChatSession
 from app.models.message import Message
 
 def create_chat_session(db: Session, tenant_id: str, title: str) -> ChatSession:
-    """Initializes a new tracking thread for conversational contexts."""
+    """
+    Initializes a new tracking session thread for conversational history
+    partitioned under a specific workspace tenant.
+    """
     session = ChatSession(
         tenant_id=tenant_id,
         title=title
@@ -15,7 +18,10 @@ def create_chat_session(db: Session, tenant_id: str, title: str) -> ChatSession:
     return session
 
 def save_message(db: Session, session_id: str, role: str, content: str) -> Message:
-    """Persists a new interaction entry within the relational message chain."""
+    """
+    Persists a historical interaction item safely indexed inside 
+    the active session context.
+    """
     message = Message(
         session_id=UUID(str(session_id)),
         role=role,
@@ -27,7 +33,9 @@ def save_message(db: Session, session_id: str, role: str, content: str) -> Messa
     return message
 
 def get_sessions(db: Session, tenant_id: str) -> list[ChatSession]:
-    """Retrieves all chat histories matching a specific tenant constraint."""
+    """
+    Retrieves all available conversation instances matching a tenant workspace boundary.
+    """
     return (
         db.query(ChatSession)
         .filter(ChatSession.tenant_id == tenant_id)
@@ -36,7 +44,9 @@ def get_sessions(db: Session, tenant_id: str) -> list[ChatSession]:
     )
 
 def get_messages(db: Session, session_id: str) -> list[Message]:
-    """Fetches chronological dialog items grouped under a unique thread session."""
+    """
+    Fetches the full chronologically sorted dialog logs belonging to a unique session thread.
+    """
     return (
         db.query(Message)
         .filter(Message.session_id == UUID(str(session_id)))
