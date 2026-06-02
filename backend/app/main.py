@@ -39,6 +39,7 @@ Instrumentator().instrument(app).expose(app)
 
 app.include_router(document_router)
 app.include_router(rag_router)
+app.include_router(chat_routes.router, prefix="/api")
 
 
 @app.get("/")
