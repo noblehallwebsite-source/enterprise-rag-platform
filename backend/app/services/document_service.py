@@ -69,9 +69,6 @@ def get_documents(
     )
 
 
-# =====================================================================
-# ADDED: POSTGRESQL RECORD RECORD DELETION
-# =====================================================================
 def delete_document(db: Session, document_id: str) -> Document | None:
     """
     Removes the document index metadata row permanently from Postgres.
@@ -88,3 +85,14 @@ def delete_document(db: Session, document_id: str) -> Document | None:
     db.delete(document)
     db.commit()
     return document
+
+
+def get_document_by_id(db: Session, document_id: str) -> Document | None:
+    """
+    Looks up a specific document registry manifest entry by its unique UUID string.
+    """
+    return (
+        db.query(Document)
+        .filter(Document.id == document_id)
+        .first()
+    )

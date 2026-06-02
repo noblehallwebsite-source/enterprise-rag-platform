@@ -210,7 +210,7 @@ def search_documents(
 
 
 # =====================================================================
-# ADDED: CHROMA VECTOR PURGE ENGINE
+# CHROMA VECTOR PURGE ENGINE
 # =====================================================================
 def delete_document_chunks(tenant_id: str, document_id: str):
     """
@@ -223,3 +223,39 @@ def delete_document_chunks(tenant_id: str, document_id: str):
             "document_id": str(document_id)
         }
     )
+
+
+# =====================================================================
+# CHROMA DOCUMENT OBSERVABILITY FRAGMENT EXTRACTOR
+# =====================================================================
+def get_document_chunks(tenant_id: str, document_id: str) -> list[dict]:
+    """
+    Queries ChromaDB to retrieve all raw text chunks and attached 
+    metadata structures indexed under a unique parent document.
+    """
+    collection = get_tenant_collection(tenant_id)
+
+    results = collection.get(
+        where={
+            "document_id": str(document_id)
+        },
+        include=[
+            "documents",
+            "metadatas"
+        ]
+    )
+
+    documents = results.get("documents", [])
+    metadatas = results.get("metadatas", [])
+
+    chunks = []
+    for doc, metadata in zip(documents, metadatas):
+        chunks.append({
+            "text": doc,
+            "metadata": metadata
+        })
+
+    # Sort chunks deterministically by their indexed sequence hierarchy position
+    chunks.sort(key=lambda x: x["metadata"].get("chunk_index", 0))
+
+    return chunks

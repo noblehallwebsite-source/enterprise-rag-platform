@@ -359,6 +359,7 @@
 
 
 
+
 import os
 import uuid
 import logging
@@ -375,7 +376,8 @@ from app.models.request_models import (
 from app.services.chroma_service import (
     add_document,
     search_documents,
-    delete_document_chunks  # 🔑 Imported vector deletion service tool
+    delete_document_chunks,
+    get_document_chunks
 )
 
 # 🔥 Import authorization gateway layer
@@ -390,7 +392,8 @@ from app.database.dependencies import (
 from app.services.document_service import (
     create_document,
     get_documents,
-    delete_document        # 🔑 Imported database eviction layout tool
+    delete_document,
+    get_document_by_id
 )
 
 from app.tasks.ingestion_tasks import (
@@ -400,7 +403,7 @@ from app.tasks.ingestion_tasks import (
 
 from celery.result import AsyncResult
 from app.core.celery_app import celery_app
-from app.models.document import Document # Directly imported for path query filtering logic
+from app.models.document import Document
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -420,7 +423,6 @@ def store_document(
     Handles immediate insertion of brief documents, snippets, or metadata adjustments.
     Executes synchronously within the request lifecycle for instant validation feedback.
     """
-    # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -463,7 +465,6 @@ def store_large_document(
     Offloads execution instantly to Celery via Redis to prevent FastAPI thread starvation 
     and shield ChromaDB from concurrent multi-container write conflicts.
     """
-    # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -505,7 +506,6 @@ def semantic_search(
     Performs isolated real-time semantic query routing.
     Limits collection operations strictly to the workspace bound to the tenant payload.
     """
-    # 🔥 STEP 7 CROSS-CHECK: Deny spoofing payloads immediately
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -549,16 +549,12 @@ async def upload_document(
     writes the temporary payload to disk, and forwards background extraction logic straight 
     to our async worker queue.
     """
-    # 🔥 Security Cross-Check: Prevent cross-tenant data leakage or malicious parameter injection
     if auth["tenant_id"] != tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: The provided API credential token is not authorized to modify this tenant workspace."
         )
 
-    # =====================================================================
-    # Create System-Of-Record SQL Tracking State Before Worker Execution
-    # =====================================================================
     try:
         document = create_document(
             db=db,
@@ -572,9 +568,6 @@ async def upload_document(
             detail="Failed to register tracking context within system database."
         )
 
-    # ==========================================
-    # Save Uploaded File
-    # ==========================================
     extension = os.path.splitext(file.filename)[1]
     unique_filename = f"{uuid.uuid4()}{extension}"
     file_path = os.path.join(UPLOAD_DIR, unique_filename)
@@ -589,11 +582,6 @@ async def upload_document(
             detail=f"Failed to write file to disk storage: {str(e)}"
         )
 
-    # ==========================================
-    # Queue Background Processing
-    # ==========================================
-    # We pass the tracking relational `document_id` so the Celery worker can later 
-    # flag this exact row as 'COMPLETED' or 'FAILED' on completion.
     task = process_uploaded_file.delay(
         tenant_id=tenant_id,
         document_id=str(document.id),
@@ -621,10 +609,8 @@ def get_task_status(task_id: str):
     Enables frontend UI polling loops to monitor document chunking progress.
     """
     try:
-        # Connects directly to the task state context inside Redis
         task_result = AsyncResult(task_id, app=celery_app)
         
-        # If the task failed, task_result.result contains the raw exception string
         result_payload = None
         if task_result.status == "SUCCESS":
             result_payload = task_result.result
@@ -647,7 +633,7 @@ def get_task_status(task_id: str):
 
 
 # =====================================================================
-# 4b. GET ALL DOCUMENTS ROUTE (TENANT-ISOLATED & SORTED REGISTRY)
+# 6. GET ALL DOCUMENTS ROUTE (TENANT-ISOLATED & SORTED REGISTRY)
 # =====================================================================
 @router.get("/documents", status_code=status.HTTP_200_OK)
 def list_documents(
@@ -659,14 +645,12 @@ def list_documents(
     Retrieves the complete historical list of uploaded files, ingestion states, 
     and chunk breakdown stats belonging to the validated tenant workspace.
     """
-    # 🔥 Security Gate: Deny data harvesting or cross-tenant visibility attempts
     if auth["tenant_id"] != tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: The provided API credential token is not authorized to view this tenant workspace."
         )
 
-    # Fetch rows straight out of the relational database layer
     documents = get_documents(
         db=db,
         tenant_id=tenant_id
@@ -676,7 +660,7 @@ def list_documents(
 
 
 # =====================================================================
-# 6. DELETE DOCUMENT ROUTE (CASCADING RELATIONAL & VECTOR PURGE ENGINE)
+# 7. DELETE DOCUMENT ROUTE (CASCADING RELATIONAL & VECTOR PURGE ENGINE)
 # =====================================================================
 @router.delete("/documents/{document_id}", status_code=status.HTTP_200_OK)
 def remove_document(
@@ -688,12 +672,7 @@ def remove_document(
     Performs validation checking on target records, wipes all matching chunk vector spaces 
     inside ChromaDB, drops the relational row inside PostgreSQL, and cleanly reports completion.
     """
-    # 1. Fetch document out of the database workspace
-    document = (
-        db.query(Document)
-        .filter(Document.id == document_id)
-        .first()
-    )
+    document = db.query(Document).filter(Document.id == document_id).first()
 
     if not document:
         raise HTTPException(
@@ -701,14 +680,12 @@ def remove_document(
             detail="Target document record not found in system database registry."
         )
 
-    # 2. Enforce strict multi-tenant privacy verification
     if document.tenant_id != auth["tenant_id"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access Denied: Unprivileged access request to protected multi-tenant data asset blocks."
         )
 
-    # 3. Drop all dependent vector pieces out of ChromaDB
     try:
         delete_document_chunks(
             tenant_id=document.tenant_id,
@@ -721,11 +698,55 @@ def remove_document(
             detail="Failed to cleanly remove document segments from vector database indexing collections."
         )
 
-    # 4. Drop reference row tracking manifest registry from Postgres
     delete_document(db=db, document_id=document_id)
 
     return {
         "message": "Document record and related vector index mappings evicted successfully.",
         "document_id": document_id,
         "tenant_id": document.tenant_id
+    }
+
+
+# =====================================================================
+# 8. DOCUMENT OBSERVABILITY ROUTE (RELATIONAL METRICS + RAW CHROMA CHUNKS)
+# =====================================================================
+@router.get("/documents/{document_id}", status_code=status.HTTP_200_OK)
+def get_document_details(
+    document_id: str,
+    auth: dict = Depends(authorize_request),
+    db: Session = Depends(get_db)
+):
+    """
+    Observability Endpoint: Aggregates relational system-of-record metrics 
+    with unstructured raw text vector fragments for audit verification.
+    """
+    document = get_document_by_id(db, document_id=document_id)
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The requested document file could not be found in the system inventory registry."
+        )
+
+    if document.tenant_id != auth["tenant_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: The active security signature token cannot access this isolated workspace entity."
+        )
+
+    chunks = get_document_chunks(
+        tenant_id=document.tenant_id,
+        document_id=document_id
+    )
+
+    return {
+        "document": {
+            "id": str(document.id),
+            "tenant_id": document.tenant_id,
+            "filename": document.filename,
+            "status": document.status,
+            "chunks_created": document.chunks_created,
+            "created_at": document.created_at
+        },
+        "chunks": chunks
     }
