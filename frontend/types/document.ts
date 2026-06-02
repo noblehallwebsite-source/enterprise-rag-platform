@@ -7,3 +7,11 @@ export interface Document {
     chunks_created: number;
     created_at: string;
 }
+
+export interface DocumentDetailsPayload {
+    document: Document;
+    chunks: Array<{
+        text: string;
+        metadata: Record<string, any>;
+    }>;
+}
