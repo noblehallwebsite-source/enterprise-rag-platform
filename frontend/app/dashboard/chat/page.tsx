@@ -1,3 +1,4 @@
+// frontend/src/app/dashboard/chat/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -20,11 +21,16 @@ export default function ChatPage() {
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
 
+    // Common security authorization context config block
+    const GATEWAY_HEADERS = {
+        "Content-Type": "application/json",
+        "x-api-key": "dev-key-company-a" // Enforces secure platform validation
+    };
+
     // 1. Core Lifecycle Initialization
     useEffect(() => {
         setMounted(true);
 
-        // Load historical sessions index tracker from localStorage
         const savedSessionsJson = localStorage.getItem("rag_all_sessions");
         let sessionsList: string[] = savedSessionsJson ? JSON.parse(savedSessionsJson) : [];
 
@@ -46,22 +52,23 @@ export default function ChatPage() {
         setHistorySessions(sessionsList);
     }, []);
 
-    // 2. Fetch Chat History from FastAPI Backend when Session Changes
+    // 2. Fetch Chat History from Backend when Session Changes
     useEffect(() => {
         if (!sessionId) return;
 
         async function fetchSessionHistory() {
             try {
-                // 🚀 Requests past conversation logs from your database via Nginx proxy mesh
-                // Replace this endpoint url path with your specific backend history route if needed!
-                const response = await axios.get(`/api/chat/history/${sessionId}`);
+                // Injects standard API authentication token structure to past logs query loop
+                const response = await axios.get(`/api/chat/history/${sessionId}`, {
+                    headers: { "x-api-key": "dev-key-company-a" }
+                });
                 if (response.data && response.data.messages) {
                     setMessages(response.data.messages);
                 } else {
-                    setMessages([]); // Fallback to empty if it's a completely new chat session
+                    setMessages([]);
                 }
             } catch (err) {
-                console.warn("Backend chat history endpoint not found or pending deployment. Starting clean state.");
+                console.warn("Backend chat history lookup bypassed or unconfigured for active token sandbox. Initializing empty history.");
                 setMessages([]);
             }
         }
@@ -71,10 +78,9 @@ export default function ChatPage() {
 
     // 3. Handle Streaming Response
     async function askQuestion() {
-        if (!question.trim()) return;
+        if (!question.trim() || loading) return;
 
         const userMessage: Message = { role: "user", content: question };
-        // Optimistically push the user message onto the screen immediately
         setMessages((prev) => [...prev, userMessage]);
         setQuestion("");
         setLoading(true);
@@ -85,17 +91,22 @@ export default function ChatPage() {
         try {
             const response = await fetch("/api/rag/stream", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: GATEWAY_HEADERS,
                 body: JSON.stringify({
                     tenant_id: "company-a",
                     session_id: sessionId,
                     query: userMessage.content,
-                    environment: selectedEnv,
-                    severity: null,
-                    source: null,
-                    service: selectedService,
+                    // Map parameters dynamically to support ChromaDB indexing type validation blocks
+                    environment: selectedEnv || "",
+                    severity: "",
+                    source: "",
+                    service: selectedService || "",
                 }),
             });
+
+            if (!response.ok) {
+                throw new Error(`HTTP Stream Initialization Aborted: Status ${response.status}`);
+            }
 
             if (!response.body) throw new Error("Failed to initialize stream reader engine.");
 
@@ -123,7 +134,7 @@ export default function ChatPage() {
             console.error("Streaming Transaction Failure:", error);
             setMessages((prev) => [
                 ...prev.slice(0, -1),
-                { role: "assistant", content: "An error occurred while streaming contextual generation output." }
+                { role: "assistant", content: "An operational fault occurred while attempting to stream contextual inference content." }
             ]);
         } finally {
             setLoading(false);
@@ -146,6 +157,7 @@ export default function ChatPage() {
 
     // 5. Switch Active Conversational Line Context
     function switchSession(id: string) {
+        if (loading) return; // Prevent navigation lock during active mutations
         localStorage.setItem("rag_chat_session_id", id);
         setSessionId(id);
     }
@@ -165,7 +177,8 @@ export default function ChatPage() {
             <div className="w-64 bg-slate-900 text-slate-200 flex flex-col p-4 border-r border-slate-800">
                 <button
                     onClick={startNewChat}
-                    className="w-full py-2.5 px-4 mb-4 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2"
+                    disabled={loading}
+                    className="w-full py-2.5 px-4 mb-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2"
                 >
                     ➕ New Chat
                 </button>
@@ -174,16 +187,15 @@ export default function ChatPage() {
                     Past Conversations
                 </span>
 
-                {/* Dynamic List Loop over historical session tokens */}
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 select-none">
                     {historySessions.map((id) => (
                         <div
                             key={id}
                             onClick={() => switchSession(id)}
                             className={`p-2.5 rounded-md text-xs font-mono cursor-pointer truncate transition-all ${id === sessionId
-                                    ? "bg-slate-800 text-white font-semibold shadow-inner border border-slate-700"
-                                    : "text-slate-400 hover:bg-slate-850 hover:text-slate-200"
-                                }`}
+                                ? "bg-slate-800 text-white font-semibold shadow-inner border border-slate-700"
+                                : "text-slate-400 hover:bg-slate-850 hover:text-slate-200"
+                                } ${loading ? "pointer-events-none opacity-60" : ""}`}
                             title={id}
                         >
                             💬 {id.slice(0, 16)}...
@@ -203,6 +215,7 @@ export default function ChatPage() {
                             <select
                                 className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:border-slate-400"
                                 onChange={(e) => setSelectedService(e.target.value || null)}
+                                disabled={loading}
                             >
                                 <option value="">All Services</option>
                                 <option value="kubernetes">Kubernetes Logs</option>
@@ -215,6 +228,7 @@ export default function ChatPage() {
                             <select
                                 className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:border-slate-400"
                                 onChange={(e) => setSelectedEnv(e.target.value || null)}
+                                disabled={loading}
                             >
                                 <option value="">All Environments</option>
                                 <option value="production">Production Only</option>
@@ -232,15 +246,15 @@ export default function ChatPage() {
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                     {messages.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-slate-400 text-sm italic">
-                            Awaiting payload execution query parameter initialization...
+                            Awaiting query parameters initialization... Ask a question below.
                         </div>
                     ) : (
                         messages.map((msg, idx) => (
                             <div
                                 key={idx}
                                 className={`max-w-3xl p-4 rounded-xl text-sm leading-relaxed ${msg.role === "user"
-                                        ? "bg-slate-900 text-white ml-auto rounded-br-none shadow-sm"
-                                        : "bg-white border border-slate-200 text-slate-800 mr-auto rounded-bl-none shadow-xs"
+                                    ? "bg-slate-900 text-white ml-auto rounded-br-none shadow-sm"
+                                    : "bg-white border border-slate-200 text-slate-800 mr-auto rounded-bl-none shadow-xs"
                                     }`}
                             >
                                 <span className="block text-[10px] uppercase font-bold tracking-wider mb-1 opacity-40">
@@ -258,9 +272,9 @@ export default function ChatPage() {
                         <input
                             value={question}
                             onChange={(e) => setQuestion(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && !loading && askQuestion()}
-                            placeholder="Ask a question concerning your enterprise infrastructure logs..."
-                            className="border border-slate-300 rounded-lg p-3 flex-1 text-sm bg-slate-50 focus:outline-none focus:bg-white focus:border-slate-900 transition-all"
+                            onKeyDown={(e) => e.key === "Enter" && askQuestion()}
+                            placeholder={loading ? "Generating answers from cluster embeddings..." : "Ask a question concerning your enterprise infrastructure logs..."}
+                            className="border border-slate-300 rounded-lg p-3 flex-1 text-sm bg-slate-50 focus:outline-none focus:bg-white focus:border-slate-900 transition-all disabled:opacity-60"
                             disabled={loading}
                         />
                         <button
