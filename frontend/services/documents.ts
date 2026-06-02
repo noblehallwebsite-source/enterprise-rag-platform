@@ -17,3 +17,22 @@ export async function getDocuments(): Promise<Document[]> {
 
     return response.json();
 }
+
+
+// frontend/src/services/documents.ts
+
+export async function deleteDocument(documentId: string): Promise<{ message: string }> {
+    const response = await fetch(`/api/documents/${documentId}`, {
+        method: "DELETE",
+        headers: {
+            "Content-Type": "application/json",
+            "x-api-key": "dev-key-company-a",
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error(`Failed to delete document: ${response.statusText}`);
+    }
+
+    return response.json();
+}

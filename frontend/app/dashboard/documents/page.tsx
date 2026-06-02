@@ -2,12 +2,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getDocuments } from "@/services/documents";
 import { Document } from "@/types/document";
+import { getDocuments, deleteDocument } from "@/services/documents";
 
 export default function DocumentsPage() {
     const [documents, setDocuments] = useState<Document[]>([]);
     const [loading, setLoading] = useState(true);
+    // Track row-level deletion loading states by storing document IDs
+    const [deletingIds, setDeletingIds] = useState<Record<string, boolean>>({});
 
     async function loadDocuments() {
         try {
@@ -28,6 +30,33 @@ export default function DocumentsPage() {
 
         return () => clearInterval(interval);
     }, []);
+
+    // Handles cascading multi-tenant document deletion
+    async function handleDelete(documentId: string, filename: string) {
+        if (!confirm(`Are you sure you want to permanently drop "${filename}" and all associated vector chunks from ChromaDB?`)) {
+            return;
+        }
+
+        try {
+            // Set row-specific loading boundary
+            setDeletingIds(prev => ({ ...prev, [documentId]: true }));
+
+            await deleteDocument(documentId);
+
+            // Optimistic UI state update for instant, snappy user feedback
+            setDocuments(prev => prev.filter(doc => doc.id !== documentId));
+        } catch (error) {
+            console.error("Deletion lifecycle failure:", error);
+            alert("Critical Error: Failed to cleanly evict document fragments from the backend layers.");
+        } finally {
+            // Clean up row lifecycle boundary
+            setDeletingIds(prev => {
+                const updated = { ...prev };
+                delete updated[documentId];
+                return updated;
+            });
+        }
+    }
 
     // Status Color Custom Mapper
     const getStatusBadge = (status: string) => {
@@ -79,37 +108,50 @@ export default function DocumentsPage() {
                                 <th className="p-4 font-medium">Status</th>
                                 <th className="p-4 font-medium text-right md:text-left">Chunks Created</th>
                                 <th className="p-4 font-medium text-right">Uploaded Time</th>
+                                <th className="p-4 font-medium text-center">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 text-gray-700">
                             {documents.length === 0 ? (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-gray-400 text-sm">
+                                    <td colSpan={5} className="p-8 text-center text-gray-400 text-sm">
                                         No documents found in this workspace collection layer.
                                     </td>
                                 </tr>
                             ) : (
-                                documents.map((doc) => (
-                                    <tr key={doc.id} className="hover:bg-gray-50/50 transition-colors">
-                                        <td className="p-4 font-medium text-gray-900 max-w-xs md:max-w-md truncate">
-                                            {doc.filename}
-                                        </td>
-                                        <td className="p-4">
-                                            <span className={`px-2.5 py-1 rounded-md text-xs font-semibold border ${getStatusBadge(doc.status)}`}>
-                                                {doc.status}
-                                            </span>
-                                        </td>
-                                        <td className="p-4 text-right md:text-left font-mono text-gray-600">
-                                            {doc.chunks_created}
-                                        </td>
-                                        <td className="p-4 text-right text-gray-500 whitespace-nowrap text-xs">
-                                            {new Date(doc.created_at).toLocaleString(undefined, {
-                                                dateStyle: "medium",
-                                                timeStyle: "short",
-                                            })}
-                                        </td>
-                                    </tr>
-                                ))
+                                documents.map((doc) => {
+                                    const isDeleting = !!deletingIds[doc.id];
+                                    return (
+                                        <tr key={doc.id} className="hover:bg-gray-50/50 transition-colors">
+                                            <td className="p-4 font-medium text-gray-900 max-w-xs md:max-w-md truncate">
+                                                {doc.filename}
+                                            </td>
+                                            <td className="p-4">
+                                                <span className={`px-2.5 py-1 rounded-md text-xs font-semibold border ${getStatusBadge(doc.status)}`}>
+                                                    {doc.status}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-right md:text-left font-mono text-gray-600">
+                                                {doc.chunks_created}
+                                            </td>
+                                            <td className="p-4 text-right text-gray-500 whitespace-nowrap text-xs">
+                                                {new Date(doc.created_at).toLocaleString(undefined, {
+                                                    dateStyle: "medium",
+                                                    timeStyle: "short",
+                                                })}
+                                            </td>
+                                            <td className="p-4 text-center">
+                                                <button
+                                                    onClick={() => handleDelete(doc.id, doc.filename)}
+                                                    disabled={isDeleting}
+                                                    className="text-xs font-semibold text-red-600 hover:text-red-800 disabled:text-gray-400 bg-red-50 hover:bg-red-100 disabled:bg-gray-50 px-2.5 py-1.5 rounded-md transition-all border border-red-100"
+                                                >
+                                                    {isDeleting ? "Wiping..." : "Delete"}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
                             )}
                         </tbody>
                     </table>
