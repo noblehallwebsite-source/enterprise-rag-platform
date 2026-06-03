@@ -26,8 +26,10 @@ export default function ChatPage() {
     const [sessionsList, setSessionsList] = useState<ChatSessionPayload[]>([]);
     const [loadingSessions, setLoadingSessions] = useState(true);
 
-    // 🔐 ATOMIC LOCK: Stops history pull from stomping on active streams
-    const isCreatingNewSession = useRef(false);
+    // 🔐 REF TRACKER: Holds the active session ID to prevent background thread sync stomping on live streams
+    const activeSessionIdRef = useRef<string | null>(null);
+    // 🔐 SKIP FLUSH LOCK: When true, tells the useEffect hook to skip fetching from DB history
+    const skipHistoryFetch = useRef(false);
 
     // Inline Session Mutation Tracking States
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -37,6 +39,11 @@ export default function ChatPage() {
     // Observability Infrastructure Filtering Configurations
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
+
+    // Update the ref whenever the active session ID state mutates
+    useEffect(() => {
+        activeSessionIdRef.current = activeSessionId;
+    }, [activeSessionId]);
 
     // 1. Initial Sync Hook: Hydrate past execution matrices from PostgreSQL
     useEffect(() => {
@@ -57,22 +64,29 @@ export default function ChatPage() {
         syncThreadHistoryRegistry();
     }, []);
 
-    // 2. FIXED: Thread Selection Sync Hook with Race-Condition Guard
+    // 2. Thread Selection Sync Hook: Pull logs on change boundaries
     useEffect(() => {
         if (!activeSessionId) {
             setMessages([]);
             return;
         }
 
-        // 🛑 LOCK CHECK: If askQuestion just made this session, don't query empty database history
-        if (isCreatingNewSession.current) {
-            isCreatingNewSession.current = false; // Release lock for subsequent clicks
+        // 🛑 SKIP RE-FETCH: If this was triggered by a brand new conversation stream, skip pulling from DB
+        if (skipHistoryFetch.current) {
+            skipHistoryFetch.current = false; // Reset lock
             return;
         }
 
         async function syncMessageChainLogs() {
+            const targetedId = activeSessionId;
+            if (!targetedId) return; // ✅ Explicit type guard refinement to eliminate TS2345
+
             try {
-                const logData = await fetchSessionHistory(activeSessionId!);
+                const logData = await fetchSessionHistory(targetedId);
+
+                // Ensure the response belongs to the session the user is currently looking at
+                if (targetedId !== activeSessionIdRef.current) return;
+
                 if (logData && Array.isArray(logData.messages)) {
                     setMessages(logData.messages);
                 } else if (Array.isArray(logData)) {
@@ -82,7 +96,9 @@ export default function ChatPage() {
                 }
             } catch (err) {
                 console.error("Could not retrieve session interaction context blocks:", err);
-                setMessages([]);
+                if (targetedId === activeSessionIdRef.current) {
+                    setMessages([]);
+                }
             }
         }
         syncMessageChainLogs();
@@ -131,21 +147,23 @@ export default function ChatPage() {
         }
     }
 
-    // 5. Orchestrate Inference Engine Streams (Fixed State Transitions)
+    // 5. Orchestrate Inference Engine Streams
     async function askQuestion() {
         if (!question.trim() || loading) return;
 
         let targetSessionId = activeSessionId;
         const currentQuestionText = question.trim();
         setQuestion("");
-
         setLoading(true);
 
         // Auto-instantiate new session thread context row if running on clear canvas
         if (!targetSessionId) {
             try {
-                isCreatingNewSession.current = true; // 🔐 Engage background intercept lock
                 const generatedTitle = currentQuestionText.length > 25 ? `${currentQuestionText.slice(0, 25)}...` : currentQuestionText;
+
+                // Block the history hook from running when we update the active session state
+                skipHistoryFetch.current = true;
+
                 const newSession = await createChatSession(generatedTitle);
 
                 setSessionsList(prev => [newSession, ...prev]);
@@ -153,7 +171,7 @@ export default function ChatPage() {
                 setActiveSessionId(newSession.id);
             } catch (err) {
                 console.error("Aborting stream: Auto-thread record instantiation failed:", err);
-                isCreatingNewSession.current = false;
+                skipHistoryFetch.current = false;
                 setLoading(false);
                 return;
             }
@@ -195,20 +213,25 @@ export default function ChatPage() {
                 const chunk = decoder.decode(value, { stream: true });
                 fullAssistantText += chunk;
 
-                setMessages((prev) => {
-                    const updated = [...prev];
-                    if (updated.length > 0) {
-                        updated[updated.length - 1] = { role: "assistant", content: fullAssistantText };
-                    }
-                    return updated;
-                });
+                // Ensure we only print text chunks if the user hasn't switched threads mid-stream
+                if (targetSessionId === activeSessionIdRef.current) {
+                    setMessages((prev) => {
+                        const updated = [...prev];
+                        if (updated.length > 0) {
+                            updated[updated.length - 1] = { role: "assistant", content: fullAssistantText };
+                        }
+                        return updated;
+                    });
+                }
             }
         } catch (error) {
             console.error("Streaming Generation Error Stack:", error);
-            setMessages((prev) => [
-                ...prev.slice(0, -1),
-                { role: "assistant", content: "A structural fault occurred while capturing streaming inference text output blocks." }
-            ]);
+            if (targetSessionId === activeSessionIdRef.current) {
+                setMessages((prev) => [
+                    ...prev.slice(0, -1),
+                    { role: "assistant", content: "A structural fault occurred while capturing streaming inference text output blocks." }
+                ]);
+            }
         } finally {
             setLoading(false);
         }
