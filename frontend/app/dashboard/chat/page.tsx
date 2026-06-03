@@ -54,7 +54,7 @@ export default function ChatPage() {
         syncThreadHistoryRegistry();
     }, []);
 
-    // 2. Thread Selection Sync Hook: Pull logs on change boundaries
+    // 2. Fixed Thread Selection Sync Hook: Pull logs on change boundaries
     useEffect(() => {
         if (!activeSessionId) {
             setMessages([]);
@@ -63,6 +63,8 @@ export default function ChatPage() {
         async function syncMessageChainLogs() {
             try {
                 const logData = await fetchSessionHistory(activeSessionId!);
+
+                // Explicitly check for the object structure matching your backend route
                 if (logData && Array.isArray(logData.messages)) {
                     setMessages(logData.messages);
                 } else if (Array.isArray(logData)) {
@@ -106,7 +108,7 @@ export default function ChatPage() {
     // 4. Mutate: Purge Data Session Record from Backend and UI State
     async function handlePurgeSession(e: React.MouseEvent, sessionId: string) {
         e.stopPropagation(); // Avoid triggering route context focus switches
-        if (!confirm("Are you sure you want to permanently delete this chat history thread? This operation cascades into message logs.")) return;
+        if (!confirm("Are you sure you want to permanently delete this chat history thread?")) return;
 
         try {
             await deleteChatSession(sessionId);
@@ -126,12 +128,17 @@ export default function ChatPage() {
         if (!question.trim() || loading) return;
 
         let targetSessionId = activeSessionId;
+        const currentQuestionText = question.trim();
+        setQuestion(""); // Instantly empty the input box to prevent double-submit hits
 
+        // Auto-instantiate new session thread context row if running on clear canvas
         if (!targetSessionId) {
             try {
                 setLoading(true);
-                const generatedTitle = question.length > 22 ? `${question.slice(0, 22)}...` : question;
+                const generatedTitle = currentQuestionText.length > 25 ? `${currentQuestionText.slice(0, 25)}...` : currentQuestionText;
                 const newSession = await createChatSession(generatedTitle);
+
+                // Add the true session object with backend UUID to the local tracking array state
                 setSessionsList(prev => [newSession, ...prev]);
                 targetSessionId = newSession.id;
                 setActiveSessionId(newSession.id);
@@ -142,11 +149,11 @@ export default function ChatPage() {
             }
         }
 
-        const userMessage: Message = { role: "user", content: question };
+        const userMessage: Message = { role: "user", content: currentQuestionText };
         setMessages((prev) => [...prev, userMessage]);
-        setQuestion("");
         setLoading(true);
 
+        // Pre-allocate assistant chunk row response shell in state
         setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
         try {
@@ -211,7 +218,7 @@ export default function ChatPage() {
     return (
         <div className="flex h-[calc(100vh-3.5rem)] w-full border border-slate-200/80 rounded-xl overflow-hidden bg-white shadow-xs font-sans">
 
-            {/* SUB-SIDEBAR PANEL: Scoped local chat thread navigation matrix */}
+            {/* SUB-SIDEBAR PANEL: Local chat thread navigation */}
             <div className="w-72 bg-slate-50 flex flex-col p-4 border-r border-slate-200/80">
                 <button
                     onClick={() => { setActiveSessionId(null); setMessages([]); setQuestion(""); }}
@@ -259,11 +266,11 @@ export default function ChatPage() {
                                         />
                                     ) : (
                                         <>
-                                            <span className="truncate pr-12 text-xs" title={session.title}>
+                                            <span className="truncate pr-16 text-xs" title={session.title}>
                                                 💬 {session.title}
                                             </span>
 
-                                            {/* Context Operations: Rename / Delete buttons visible on container group hover */}
+                                            {/* Context Operations: Rename / Delete buttons */}
                                             <div className="absolute right-1.5 opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity bg-transparent">
                                                 <button
                                                     onClick={(e) => {
