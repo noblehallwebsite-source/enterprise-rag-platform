@@ -81,6 +81,10 @@ from app.services.security_service import (
 )
 from app.services.ai_service import client
 
+# Import your database session dependency tracking block at the top of the file
+from app.database.dependencies import get_db
+from sqlalchemy.orm import Session
+
 router = APIRouter()
 
 
@@ -91,7 +95,8 @@ router = APIRouter()
 def rag_query_stream(
     data: RagQueryRequest, 
     background_tasks: BackgroundTasks,
-    auth: dict = Depends(authorize_request)
+    auth: dict = Depends(authorize_request),
+    db: Session = Depends(get_db) # 👈 1. INJECT THE DATABASE ENGINE HERE
 ): 
     # 🔥 STEP 7: ENFORCE STRICT TENANT SECURITY CROSS-CHECK
     if auth["tenant_id"] != data.tenant_id:
@@ -107,9 +112,11 @@ def rag_query_stream(
         "service": data.service
     }
 
+    # 2. PASS DB down into your background stream executor 
     result = run_streaming_rag_pipeline(
         client=client,
-        tenant_id=data.tenant_id,  # Guaranteed safe by the cross-check guard above
+        db=db, # 👈 3. SUPPLY THE TRANSACTION LAYER HERE
+        tenant_id=data.tenant_id,  
         session_id=data.session_id,
         query=data.query,
         background_tasks=background_tasks, 
