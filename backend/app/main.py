@@ -3,10 +3,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
+
 # Explicitly import all router layers cleanly
 from app.routes.document_routes import router as document_router
 from app.routes.rag_routes import router as rag_router
 from app.routes.chat_routes import router as chat_router
+from app.database.init_db import init_database  # 👈 Import your routine directly
+
+# Run your initialization sequence immediately on app context load
+init_database()
 
 app = FastAPI(
     title="Enterprise RAG Platform",
