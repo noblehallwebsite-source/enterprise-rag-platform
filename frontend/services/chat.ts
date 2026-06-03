@@ -62,3 +62,37 @@ export async function fetchSessionHistory(sessionId: string): Promise<Historical
     if (!response.ok) throw new Error(`Failed to retrieve message logs for session: ${sessionId}`);
     return response.json();
 }
+
+/**
+ * Updates the title attribute of an active conversation session tracking thread.
+ */
+export async function renameChatSession(sessionId: string, newTitle: string): Promise<ChatSessionPayload> {
+    const response = await fetch(`/api/chat/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: SECURITY_HEADERS,
+        body: JSON.stringify({ title: newTitle }),
+    });
+
+    if (!response.ok) {
+        const textError = await response.text();
+        console.error(`🔴 [Rename Session Failure] Status: ${response.status} | Payload:`, textError);
+        throw new Error(`Failed to modify chat session title state attributes. Status: ${response.status}`);
+    }
+    return response.json();
+}
+
+/**
+ * Issues a hard deletion signal to the backend to purge a session thread and cascade-delete its messages.
+ */
+export async function deleteChatSession(sessionId: string): Promise<void> {
+    const response = await fetch(`/api/chat/sessions/${sessionId}`, {
+        method: "DELETE",
+        headers: SECURITY_HEADERS,
+    });
+
+    if (!response.ok) {
+        const textError = await response.text();
+        console.error(`🔴 [Delete Session Failure] Status: ${response.status} | Payload:`, textError);
+        throw new Error(`Failed to issue hard deletion signal to relational core row. Status: ${response.status}`);
+    }
+}
