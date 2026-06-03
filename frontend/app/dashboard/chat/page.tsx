@@ -26,6 +26,9 @@ export default function ChatPage() {
     const [sessionsList, setSessionsList] = useState<ChatSessionPayload[]>([]);
     const [loadingSessions, setLoadingSessions] = useState(true);
 
+    // 🔐 ATOMIC LOCK: Stops history pull from stomping on active streams
+    const isCreatingNewSession = useRef(false);
+
     // Inline Session Mutation Tracking States
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editTitleBuffer, setEditTitleBuffer] = useState("");
@@ -54,17 +57,22 @@ export default function ChatPage() {
         syncThreadHistoryRegistry();
     }, []);
 
-    // 2. Fixed Thread Selection Sync Hook: Pull logs on change boundaries
+    // 2. FIXED: Thread Selection Sync Hook with Race-Condition Guard
     useEffect(() => {
         if (!activeSessionId) {
             setMessages([]);
             return;
         }
+
+        // 🛑 LOCK CHECK: If askQuestion just made this session, don't query empty database history
+        if (isCreatingNewSession.current) {
+            isCreatingNewSession.current = false; // Release lock for subsequent clicks
+            return;
+        }
+
         async function syncMessageChainLogs() {
             try {
                 const logData = await fetchSessionHistory(activeSessionId!);
-
-                // Explicitly check for the object structure matching your backend route
                 if (logData && Array.isArray(logData.messages)) {
                     setMessages(logData.messages);
                 } else if (Array.isArray(logData)) {
@@ -107,7 +115,7 @@ export default function ChatPage() {
 
     // 4. Mutate: Purge Data Session Record from Backend and UI State
     async function handlePurgeSession(e: React.MouseEvent, sessionId: string) {
-        e.stopPropagation(); // Avoid triggering route context focus switches
+        e.stopPropagation();
         if (!confirm("Are you sure you want to permanently delete this chat history thread?")) return;
 
         try {
@@ -123,38 +131,37 @@ export default function ChatPage() {
         }
     }
 
-    // 5. Orchestrate Inference Engine Streams
+    // 5. Orchestrate Inference Engine Streams (Fixed State Transitions)
     async function askQuestion() {
         if (!question.trim() || loading) return;
 
         let targetSessionId = activeSessionId;
         const currentQuestionText = question.trim();
-        setQuestion(""); // Instantly empty the input box to prevent double-submit hits
+        setQuestion("");
+
+        setLoading(true);
 
         // Auto-instantiate new session thread context row if running on clear canvas
         if (!targetSessionId) {
             try {
-                setLoading(true);
+                isCreatingNewSession.current = true; // 🔐 Engage background intercept lock
                 const generatedTitle = currentQuestionText.length > 25 ? `${currentQuestionText.slice(0, 25)}...` : currentQuestionText;
                 const newSession = await createChatSession(generatedTitle);
 
-                // Add the true session object with backend UUID to the local tracking array state
                 setSessionsList(prev => [newSession, ...prev]);
                 targetSessionId = newSession.id;
                 setActiveSessionId(newSession.id);
             } catch (err) {
                 console.error("Aborting stream: Auto-thread record instantiation failed:", err);
+                isCreatingNewSession.current = false;
                 setLoading(false);
                 return;
             }
         }
 
+        // Commit user prompt to UI window state safely
         const userMessage: Message = { role: "user", content: currentQuestionText };
-        setMessages((prev) => [...prev, userMessage]);
-        setLoading(true);
-
-        // Pre-allocate assistant chunk row response shell in state
-        setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+        setMessages((prev) => [...prev, userMessage, { role: "assistant", content: "" }]);
 
         try {
             const response = await fetch("http://164.68.120.179:8000/rag/stream", {
@@ -249,7 +256,7 @@ export default function ChatPage() {
                                     className={`group relative p-2 rounded-lg text-xs flex items-center justify-between border cursor-pointer transition-all ${isCurrent
                                         ? "bg-white text-slate-900 font-medium border-slate-200/80 shadow-xs"
                                         : "text-slate-500 hover:bg-slate-100/70 border-transparent hover:text-slate-800"
-                                        } ${loading ? "pointer-events-none opacity-60" : ""}`}
+                                        }`}
                                 >
                                     {isEditing ? (
                                         <input
