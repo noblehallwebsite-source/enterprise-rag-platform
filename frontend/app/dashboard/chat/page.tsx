@@ -1,4 +1,3 @@
-// frontend/src/app/dashboard/chat/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -35,10 +34,10 @@ export default function ChatPage() {
         async function syncThreadHistoryRegistry() {
             try {
                 const records = await fetchAllSessions();
-                setSessionsList(records);
+                setSessionsList(records || []);
 
                 // Fallback: Default directly to the most recent thread item if it exists
-                if (records.length > 0) {
+                if (records && records.length > 0) {
                     setActiveSessionId(records[0].id);
                 }
             } catch (err) {
@@ -52,20 +51,29 @@ export default function ChatPage() {
 
     // 2. Thread Selection Sync Hook: Pull individual message logs when activeSessionId updates
     useEffect(() => {
-        // Guard clause handles the null state immediately
+        // Guard clause handles the null state immediately (e.g., when clicking "New Chat")
         if (!activeSessionId) {
             setMessages([]);
             return;
         }
 
-        // Local variable assignment isolates type context to strictly a string, 
-        // satisfying TypeScript's strict null checking control flow.
         const sessionId: string = activeSessionId;
 
         async function syncMessageChainLogs() {
             try {
                 const logData = await fetchSessionHistory(sessionId);
-                setMessages(logData.messages);
+                console.log("Raw Chat Hydration API Payload Trace:", logData);
+
+                // Safe Extraction Check: Accommodates both raw objects containing .messages 
+                // and API clients that already automatically return raw arrays.
+                if (logData && logData.messages) {
+                    setMessages(logData.messages);
+                } else if (Array.isArray(logData)) {
+                    setMessages(logData);
+                } else {
+                    console.warn("Unexpected API response layout configuration payload structure.");
+                    setMessages([]);
+                }
             } catch (err) {
                 console.error("Could not retrieve session interaction context blocks:", err);
                 setMessages([]);
@@ -150,7 +158,7 @@ export default function ChatPage() {
             console.error("Streaming Generation Error Stack:", error);
             setMessages((prev) => [
                 ...prev.slice(0, -1),
-                { role: "assistant", content: "An structural fault occurred while recording streaming inference data output blocks." }
+                { role: "assistant", content: "A structural fault occurred while recording streaming inference data output blocks." }
             ]);
         } finally {
             setLoading(false);
