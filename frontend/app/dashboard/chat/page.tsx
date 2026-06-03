@@ -5,6 +5,8 @@ import {
     createChatSession,
     fetchAllSessions,
     fetchSessionHistory,
+    renameChatSession, // Ensure these are exported from your @/services/chat file
+    deleteChatSession,
     ChatSessionPayload
 } from "@/services/chat";
 
@@ -24,6 +26,11 @@ export default function ChatPage() {
     const [sessionsList, setSessionsList] = useState<ChatSessionPayload[]>([]);
     const [loadingSessions, setLoadingSessions] = useState(true);
 
+    // ✏️ INLINE EDITING TRACKING STATES
+    const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+    const [editTitleBuffer, setEditTitleBuffer] = useState("");
+    const renameInputRef = useRef<HTMLInputElement>(null);
+
     // Observability Vector Filter Flags
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
@@ -36,6 +43,14 @@ export default function ChatPage() {
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
     }, [activeSessionId]);
+
+    // Focus utility handler for inline editing inputs
+    useEffect(() => {
+        if (editingSessionId && renameInputRef.current) {
+            renameInputRef.current.focus();
+            renameInputRef.current.select();
+        }
+    }, [editingSessionId]);
 
     // 1. Initial Sync Hook: Sync historical list from PostgreSQL database
     useEffect(() => {
@@ -191,6 +206,40 @@ export default function ChatPage() {
         }
     }
 
+    // 🛠️ MUTATION: Save Session Title Updates to Backend and UI States
+    async function handleRenameCommit(sessionId: string) {
+        if (!editTitleBuffer.trim()) {
+            setEditingSessionId(null);
+            return;
+        }
+        try {
+            const updated = await renameChatSession(sessionId, editTitleBuffer.trim());
+            setSessionsList(prev => prev.map(s => s.id === sessionId ? { ...s, title: updated.title } : s));
+        } catch (err) {
+            console.error("Failed to commit inline title modification:", err);
+        } finally {
+            setEditingSessionId(null);
+        }
+    }
+
+    // 🛠️ MUTATION: Drop Target Session Records Completely from State & DB
+    async function handlePurgeSession(e: React.MouseEvent, sessionId: string) {
+        e.stopPropagation(); // Prevents clicking delete from selecting the thread context
+        if (!confirm("Are you sure you want to permanently delete this chat history thread?")) return;
+
+        try {
+            await deleteChatSession(sessionId);
+            setSessionsList(prev => prev.filter(s => s.id !== sessionId));
+            if (activeSessionId === sessionId) {
+                setActiveSessionId(null);
+                setMessages([]);
+            }
+        } catch (err) {
+            console.error("Failed to execute data entity clear operation:", err);
+            alert("Failed to drop session trace rows from database registry.");
+        }
+    }
+
     // 4. Client Explicit Trigger: Instantly reset view layout parameters for a fresh thread
     function startNewChat() {
         setActiveSessionId(null);
@@ -231,17 +280,59 @@ export default function ChatPage() {
                     ) : (
                         sessionsList.map((session) => {
                             const isCurrent = session.id === activeSessionId;
+                            const isEditing = session.id === editingSessionId;
+
                             return (
                                 <div
                                     key={session.id}
-                                    onClick={() => !loading && setActiveSessionId(session.id)}
-                                    className={`p-2.5 rounded-md text-xs cursor-pointer truncate transition-all border ${isCurrent
+                                    onClick={() => !loading && !isEditing && setActiveSessionId(session.id)}
+                                    className={`group relative p-2.5 rounded-md text-xs flex items-center justify-between border cursor-pointer transition-all ${isCurrent
                                         ? "bg-slate-800 text-white font-semibold border-slate-700 shadow-inner"
                                         : "text-slate-400 hover:bg-slate-850 hover:text-slate-200 border-transparent"
                                         } ${loading ? "pointer-events-none opacity-60" : ""}`}
-                                    title={session.title}
                                 >
-                                    💬 {session.title}
+                                    {isEditing ? (
+                                        <input
+                                            ref={renameInputRef}
+                                            value={editTitleBuffer}
+                                            onChange={(e) => setEditTitleBuffer(e.target.value)}
+                                            onBlur={() => handleRenameCommit(session.id)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") handleRenameCommit(session.id);
+                                                if (e.key === "Escape") setEditingSessionId(null);
+                                            }}
+                                            className="w-full p-1 bg-slate-950 border border-slate-700 rounded font-normal text-slate-200 focus:outline-none focus:border-slate-500"
+                                            onClick={(e) => e.stopPropagation()}
+                                        />
+                                    ) : (
+                                        <>
+                                            <span className="truncate pr-14 text-xs" title={session.title}>
+                                                💬 {session.title}
+                                            </span>
+
+                                            {/* Action triggers reveal layout smoothly on element container hovering */}
+                                            <div className="absolute right-1.5 hidden group-hover:flex items-center gap-1 bg-transparent">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setEditingSessionId(session.id);
+                                                        setEditTitleBuffer(session.title);
+                                                    }}
+                                                    title="Rename thread"
+                                                    className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50 transition-colors"
+                                                >
+                                                    ✏️
+                                                </button>
+                                                <button
+                                                    onClick={(e) => handlePurgeSession(e, session.id)}
+                                                    title="Purge session"
+                                                    className="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-red-950/30 transition-colors"
+                                                >
+                                                    🗑️
+                                                </button>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             );
                         })
