@@ -5,7 +5,7 @@ import {
     createChatSession,
     fetchAllSessions,
     fetchSessionHistory,
-    renameChatSession, // Ensure these are exported from your @/services/chat file
+    renameChatSession,
     deleteChatSession,
     ChatSessionPayload
 } from "@/services/chat";
@@ -26,7 +26,10 @@ export default function ChatPage() {
     const [sessionsList, setSessionsList] = useState<ChatSessionPayload[]>([]);
     const [loadingSessions, setLoadingSessions] = useState(true);
 
-    // ✏️ INLINE EDITING TRACKING STATES
+    // Responsive Mobile Control Drawer
+    const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+
+    // Inline Editing Tracking States
     const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
     const [editTitleBuffer, setEditTitleBuffer] = useState("");
     const renameInputRef = useRef<HTMLInputElement>(null);
@@ -35,16 +38,13 @@ export default function ChatPage() {
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
 
-    // 🔐 ATOMIC CONTROL REFS: Stops background DB calls from clearing active chat streams
     const activeSessionIdRef = useRef<string | null>(null);
     const skipHistoryFetch = useRef(false);
 
-    // Sync ref tracking with state changes
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
     }, [activeSessionId]);
 
-    // Focus utility handler for inline editing inputs
     useEffect(() => {
         if (editingSessionId && renameInputRef.current) {
             renameInputRef.current.focus();
@@ -52,15 +52,13 @@ export default function ChatPage() {
         }
     }, [editingSessionId]);
 
-    // 1. Initial Sync Hook: Sync historical list from PostgreSQL database
+    // 1. Initial Sync Hook
     useEffect(() => {
         setMounted(true);
         async function syncThreadHistoryRegistry() {
             try {
                 const records = await fetchAllSessions();
                 setSessionsList(records || []);
-
-                // Fallback: Default directly to the most recent thread item if it exists
                 if (records && records.length > 0) {
                     setActiveSessionId(records[0].id);
                 }
@@ -73,17 +71,15 @@ export default function ChatPage() {
         syncThreadHistoryRegistry();
     }, []);
 
-    // 2. Thread Selection Sync Hook: Pull individual message logs when activeSessionId updates
+    // 2. Thread Selection Sync Hook
     useEffect(() => {
-        // Guard clause handles the null state immediately (e.g., when clicking "New Chat")
         if (!activeSessionId) {
             setMessages([]);
             return;
         }
 
-        // 🛑 LOCK CHECK: If this active ID change came from askQuestion initializing a thread, skip database pull
         if (skipHistoryFetch.current) {
-            skipHistoryFetch.current = false; // Release lock
+            skipHistoryFetch.current = false;
             return;
         }
 
@@ -92,25 +88,18 @@ export default function ChatPage() {
         async function syncMessageChainLogs() {
             try {
                 const logData = await fetchSessionHistory(sessionId);
-                console.log("Raw Chat Hydration API Payload Trace:", logData);
-
-                // Anti-Stale Guard: Ensure the user hasn't switched sessions while waiting for this fetch
                 if (sessionId !== activeSessionIdRef.current) return;
 
-                // Safe Extraction Check
                 if (logData && logData.messages) {
                     setMessages(logData.messages);
                 } else if (Array.isArray(logData)) {
                     setMessages(logData);
                 } else {
-                    console.warn("Unexpected API response layout configuration payload structure.");
                     setMessages([]);
                 }
             } catch (err) {
                 console.error("Could not retrieve session interaction context blocks:", err);
-                if (sessionId === activeSessionIdRef.current) {
-                    setMessages([]);
-                }
+                if (sessionId === activeSessionIdRef.current) setMessages([]);
             }
         }
         syncMessageChainLogs();
@@ -126,12 +115,9 @@ export default function ChatPage() {
         setQuestion("");
         setLoading(true);
 
-        // Lazy-Initialization Guard: Generate database session record on empty canvas
         if (!targetSessionId) {
             try {
                 const generatedTitle = currentQuestionText.length > 25 ? `${currentQuestionText.slice(0, 25)}...` : currentQuestionText;
-
-                // 🔐 ENGAGE BACKEND SKIP LOCK: Tells the history hook not to overwrite this streaming lifecycle
                 skipHistoryFetch.current = true;
 
                 const newSession = await createChatSession(generatedTitle);
@@ -140,7 +126,6 @@ export default function ChatPage() {
                 setActiveSessionId(newSession.id);
             } catch (err) {
                 console.error("Aborting stream: Auto-thread record instantiation failed:", err);
-                alert("Failed to initialize conversational workspace environment context row.");
                 skipHistoryFetch.current = false;
                 setLoading(false);
                 return;
@@ -168,8 +153,8 @@ export default function ChatPage() {
                 }),
             });
 
-            if (!response.ok) throw new Error(`Inference engine endpoint returned status error: ${response.status}`);
-            if (!response.body) throw new Error("Network architecture failed to allocate text-stream reader layer.");
+            if (!response.ok) throw new Error(`Stream endpoint returned error: ${response.status}`);
+            if (!response.body) throw new Error("Failed to allocate text-stream reader layer.");
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -182,7 +167,6 @@ export default function ChatPage() {
                 const chunk = decoder.decode(value, { stream: true });
                 fullAssistantText += chunk;
 
-                // Ensure stream text updates only append if the user is actively viewing this thread
                 if (targetSessionId === activeSessionIdRef.current) {
                     setMessages((prev) => {
                         const updated = [...prev];
@@ -206,7 +190,6 @@ export default function ChatPage() {
         }
     }
 
-    // 🛠️ MUTATION: Save Session Title Updates to Backend and UI States
     async function handleRenameCommit(sessionId: string) {
         if (!editTitleBuffer.trim()) {
             setEditingSessionId(null);
@@ -222,9 +205,8 @@ export default function ChatPage() {
         }
     }
 
-    // 🛠️ MUTATION: Drop Target Session Records Completely from State & DB
     async function handlePurgeSession(e: React.MouseEvent, sessionId: string) {
-        e.stopPropagation(); // Prevents clicking delete from selecting the thread context
+        e.stopPropagation();
         if (!confirm("Are you sure you want to permanently delete this chat history thread?")) return;
 
         try {
@@ -236,198 +218,243 @@ export default function ChatPage() {
             }
         } catch (err) {
             console.error("Failed to execute data entity clear operation:", err);
-            alert("Failed to drop session trace rows from database registry.");
         }
     }
 
-    // 4. Client Explicit Trigger: Instantly reset view layout parameters for a fresh thread
     function startNewChat() {
         setActiveSessionId(null);
         setMessages([]);
         setQuestion("");
+        setIsMobileSidebarOpen(false);
     }
 
     if (!mounted) {
         return (
-            <div className="max-w-5xl p-6 font-sans text-slate-500 animate-pulse font-medium">
-                Syncing chat history infrastructure engine...
+            <div className="flex h-screen items-center justify-center bg-slate-900 text-sm font-medium text-slate-400 font-sans">
+                <div className="flex items-center gap-3">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent" />
+                    Syncing console environment infrastructure...
+                </div>
             </div>
         );
     }
 
-    return (
-        <div className="flex h-[calc(100vh-4rem)] max-w-7xl mx-auto border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm font-sans">
+    // Extracted Sidebar component to avoid duplicate layout declarations
+    const SidebarContent = () => (
+        <div className="flex h-full flex-col bg-slate-950 p-4 text-slate-200">
+            <button
+                onClick={startNewChat}
+                disabled={loading || (activeSessionId === null && messages.length === 0)}
+                className="mb-6 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-4 py-2.5 text-xs font-semibold tracking-wide text-white transition-all hover:bg-slate-850 active:scale-[0.98] disabled:opacity-30"
+            >
+                <span>➕</span> New Terminal Context
+            </button>
 
-            {/* LEFT SIDEBAR: Relational Thread History Navigation panel */}
-            <div className="w-64 bg-slate-900 text-slate-200 flex flex-col p-4 border-r border-slate-800">
-                <button
-                    onClick={startNewChat}
-                    disabled={loading || (activeSessionId === null && messages.length === 0)}
-                    className="w-full py-2.5 px-4 mb-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-white text-sm font-medium rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-2 shadow-sm"
-                >
-                    ➕ New Chat
-                </button>
+            <span className="mb-3 block px-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Persistent Threads
+            </span>
 
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 block px-2">
-                    Persistent History
-                </span>
+            <div className="flex-1 space-y-1 overflow-y-auto pr-1 select-none custom-scrollbar">
+                {loadingSessions ? (
+                    <div className="p-3 text-xs italic text-slate-600 animate-pulse">Syncing catalog registry...</div>
+                ) : sessionsList.length === 0 ? (
+                    <div className="p-3 text-xs italic text-slate-600">No telemetry frames allocated.</div>
+                ) : (
+                    sessionsList.map((session) => {
+                        const isCurrent = session.id === activeSessionId;
+                        const isEditing = session.id === editingSessionId;
 
-                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 select-none">
-                    {loadingSessions ? (
-                        <div className="p-3 text-xs text-slate-500 italic animate-pulse">Syncing thread rows...</div>
-                    ) : sessionsList.length === 0 ? (
-                        <div className="p-3 text-xs text-slate-500 italic">No historical entries stored.</div>
-                    ) : (
-                        sessionsList.map((session) => {
-                            const isCurrent = session.id === activeSessionId;
-                            const isEditing = session.id === editingSessionId;
-
-                            return (
-                                <div
-                                    key={session.id}
-                                    onClick={() => !loading && !isEditing && setActiveSessionId(session.id)}
-                                    className={`group relative p-2.5 rounded-md text-xs flex items-center justify-between border cursor-pointer transition-all ${isCurrent
-                                        ? "bg-slate-800 text-white font-semibold border-slate-700 shadow-inner"
-                                        : "text-slate-400 hover:bg-slate-850 hover:text-slate-200 border-transparent"
-                                        } ${loading ? "pointer-events-none opacity-60" : ""}`}
-                                >
-                                    {isEditing ? (
-                                        <input
-                                            ref={renameInputRef}
-                                            value={editTitleBuffer}
-                                            onChange={(e) => setEditTitleBuffer(e.target.value)}
-                                            onBlur={() => handleRenameCommit(session.id)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === "Enter") handleRenameCommit(session.id);
-                                                if (e.key === "Escape") setEditingSessionId(null);
-                                            }}
-                                            className="w-full p-1 bg-slate-950 border border-slate-700 rounded font-normal text-slate-200 focus:outline-none focus:border-slate-500"
-                                            onClick={(e) => e.stopPropagation()}
-                                        />
-                                    ) : (
-                                        <>
-                                            <span className="truncate pr-14 text-xs" title={session.title}>
-                                                💬 {session.title}
-                                            </span>
-
-                                            {/* Action triggers reveal layout smoothly on element container hovering */}
-                                            <div className="absolute right-1.5 hidden group-hover:flex items-center gap-1 bg-transparent">
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setEditingSessionId(session.id);
-                                                        setEditTitleBuffer(session.title);
-                                                    }}
-                                                    title="Rename thread"
-                                                    className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50 transition-colors"
-                                                >
-                                                    ✏️
-                                                </button>
-                                                <button
-                                                    onClick={(e) => handlePurgeSession(e, session.id)}
-                                                    title="Purge session"
-                                                    className="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-red-950/30 transition-colors"
-                                                >
-                                                    🗑️
-                                                </button>
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-            </div>
-
-            {/* RIGHT MAIN WORKSPACE CONSOLE MONITOR */}
-            <div className="flex-1 flex flex-col bg-slate-50">
-
-                {/* Top Operational Telemetry Filter Toolbar */}
-                <div className="p-4 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-4 shadow-xs">
-                    <div className="flex items-center gap-4 text-xs">
-                        <div className="flex items-center gap-1.5">
-                            <label className="text-slate-500 font-medium">Vector Space Scope:</label>
-                            <select
-                                className="bg-slate-50 border border-slate-200 rounded px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:border-slate-400"
-                                onChange={(e) => setSelectedService(e.target.value || null)}
-                                disabled={loading}
-                            >
-                                <option value="">All Scopes</option>
-                                <option value="kubernetes">Cluster Logs Container</option>
-                                <option value="hr-docs">Internal Assets Docs</option>
-                            </select>
-                        </div>
-
-                        <div className="flex items-center gap-1.5">
-                            <label className="text-slate-500 font-medium">Env Context:</label>
-                            <select
-                                className="bg-slate-50 border border-slate-200 rounded px-2.5 py-1 text-slate-700 font-medium focus:outline-none focus:border-slate-400"
-                                onChange={(e) => setSelectedEnv(e.target.value || null)}
-                                disabled={loading}
-                            >
-                                <option value="">All Environments</option>
-                                <option value="production">Production Workloads</option>
-                                <option value="staging">Staging Sandbox</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div className="text-[10px] text-slate-400 font-mono bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-md shadow-inner">
-                        THREAD: {activeSessionId ? activeSessionId.slice(0, 8) : "UNSAVED_CANVAS"}
-                    </div>
-                </div>
-
-                {/* Main Message Thread Timeline Stream */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                    {messages.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
-                            <div className="text-2xl">🧠</div>
-                            <div className="italic font-medium">Enterprise Knowledge Engine Ready</div>
-                            <div className="text-xs text-slate-400 max-w-sm text-center">
-                                Submit a question regarding infrastructure telemetry data. The execution context will instantly be bound to a persistent database session thread tracking log.
-                            </div>
-                        </div>
-                    ) : (
-                        messages.map((msg, idx) => (
+                        return (
                             <div
-                                key={idx}
-                                className={`max-w-3xl p-4 rounded-xl text-sm leading-relaxed border transition-all ${msg.role === "user"
-                                    ? "bg-slate-900 text-white ml-auto rounded-br-none border-slate-950 shadow-sm"
-                                    : "bg-white text-slate-800 mr-auto rounded-bl-none border-slate-200/80 shadow-xs"
-                                    }`}
+                                key={session.id}
+                                onClick={() => {
+                                    if (!loading && !isEditing) {
+                                        setActiveSessionId(session.id);
+                                        setIsMobileSidebarOpen(false);
+                                    }
+                                }}
+                                className={`group relative flex items-center justify-between rounded-lg p-3 text-xs border transition-all duration-150 ${isCurrent
+                                    ? "bg-slate-900 text-white font-medium border-slate-800 shadow-sm"
+                                    : "text-slate-400 border-transparent hover:bg-slate-900/40 hover:text-slate-200"
+                                    } ${loading ? "pointer-events-none opacity-50" : ""}`}
                             >
-                                <span className="block text-[9px] uppercase font-bold tracking-wider mb-1.5 opacity-40">
-                                    {msg.role === "user" ? "Infrastructure Engineer" : "System Cognition Core"}
-                                </span>
-                                <div className="whitespace-pre-wrap font-sans leading-relaxed">{msg.content}</div>
+                                {isEditing ? (
+                                    <input
+                                        ref={renameInputRef}
+                                        value={editTitleBuffer}
+                                        onChange={(e) => setEditTitleBuffer(e.target.value)}
+                                        onBlur={() => handleRenameCommit(session.id)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") handleRenameCommit(session.id);
+                                            if (e.key === "Escape") setEditingSessionId(null);
+                                        }}
+                                        className="w-full bg-slate-950 px-2 py-1 border border-slate-700 rounded text-slate-200 focus:outline-none focus:border-slate-500"
+                                        onClick={(e) => e.stopPropagation()}
+                                    />
+                                ) : (
+                                    <>
+                                        <span className="truncate pr-16" title={session.title}>
+                                            📟 {session.title}
+                                        </span>
+
+                                        <div className="absolute right-2 flex items-center gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-150">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setEditingSessionId(session.id);
+                                                    setEditTitleBuffer(session.title);
+                                                }}
+                                                className="p-1 text-slate-500 hover:text-white rounded bg-slate-950/80 lg:bg-transparent"
+                                            >
+                                                ✏️
+                                            </button>
+                                            <button
+                                                onClick={(e) => handlePurgeSession(e, session.id)}
+                                                className="p-1 text-slate-500 hover:text-red-400 rounded bg-slate-950/80 lg:bg-transparent"
+                                            >
+                                                🗑️
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
                             </div>
-                        ))
+                        );
+                    })
+                )}
+            </div>
+        </div>
+    );
+
+    return (
+        <div className="flex h-screen w-full overflow-hidden bg-slate-900 font-sans text-slate-900 selection:bg-slate-200">
+
+            {/* DESKTOP SIDEBAR PANEL */}
+            <aside className="hidden w-64 shrink-0 border-r border-slate-800 lg:block">
+                <SidebarContent />
+            </aside>
+
+            {/* RESPONSIVE MOBILE OVERLAY SIDEBAR DRAWER */}
+            {isMobileSidebarOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex bg-slate-950/60 backdrop-blur-xs lg:hidden"
+                    onClick={() => setIsMobileSidebarOpen(false)}
+                >
+                    <div
+                        className="w-72 h-full animate-slide-in"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <SidebarContent />
+                    </div>
+                </div>
+            )}
+
+            {/* MAIN APP CONSOLE MONITOR VIEWPORT */}
+            <main className="flex flex-1 flex-col overflow-hidden bg-slate-950 lg:m-2 lg:rounded-2xl lg:border lg:border-slate-800 shadow-2xl">
+
+                {/* Global Telemetry Control Header Bar */}
+                <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800/60 bg-slate-900/40 px-4 backdrop-blur-md">
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => setIsMobileSidebarOpen(true)}
+                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-800 text-slate-400 hover:bg-slate-900 lg:hidden"
+                        >
+                            ☰
+                        </button>
+
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+                            <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                                <span>Scope:</span>
+                                <select
+                                    className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-slate-600 text-xs cursor-pointer"
+                                    onChange={(e) => setSelectedService(e.target.value || null)}
+                                    disabled={loading}
+                                    value={selectedService || ""}
+                                >
+                                    <option value="">All Scopes</option>
+                                    <option value="kubernetes">Cluster Logs Container</option>
+                                    <option value="hr-docs">Internal Assets Docs</option>
+                                </select>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                                <span>Env:</span>
+                                <select
+                                    className="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-slate-300 focus:outline-none focus:border-slate-600 text-xs cursor-pointer"
+                                    onChange={(e) => setSelectedEnv(e.target.value || null)}
+                                    disabled={loading}
+                                    value={selectedEnv || ""}
+                                >
+                                    <option value="">All Environments</option>
+                                    <option value="production">Production Workloads</option>
+                                    <option value="staging">Staging Sandbox</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="hidden sm:block rounded-md border border-slate-800 bg-slate-950 px-2.5 py-1 font-mono text-[10px] tracking-tight text-slate-500 shadow-inner">
+                        ID: {activeSessionId ? activeSessionId.slice(0, 8) : "UNSAVED_CANVAS"}
+                    </div>
+                </header>
+
+                {/* Core Message Timeline Content Deck */}
+                <div className="flex-1 overflow-y-auto bg-slate-900/20 p-4 md:p-6 space-y-6 custom-scrollbar">
+                    {messages.length === 0 ? (
+                        <div className="flex h-full flex-col items-center justify-center text-center px-4">
+                            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-slate-800 bg-slate-900 text-xl shadow-inner animate-pulse">
+                                🧠
+                            </div>
+                            <h3 className="text-sm font-semibold tracking-wide text-slate-200">System Cognition Core Engaged</h3>
+                            <p className="mt-1 max-w-sm text-xs leading-normal text-slate-500">
+                                Submit execution queries down into the orchestration pipeline layer. Telemetry vectors wrap completely inside managed persistence arrays automatically.
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="mx-auto max-w-3xl space-y-6">
+                            {messages.map((msg, idx) => (
+                                <div
+                                    key={idx}
+                                    className={`flex w-full flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
+                                >
+                                    <div className="mb-1 text-[9px] font-bold uppercase tracking-widest text-slate-500 px-1">
+                                        {msg.role === "user" ? "Infrastructure Engineer" : "Cognition Core Output"}
+                                    </div>
+                                    <div
+                                        className={`w-full max-w-2xl rounded-xl border p-4 text-xs leading-relaxed shadow-xs transition-all ${msg.role === "user"
+                                            ? "bg-slate-100 text-slate-900 border-slate-200"
+                                            : "bg-slate-900 text-slate-100 border-slate-800/80"
+                                            }`}
+                                    >
+                                        <div className="whitespace-pre-wrap font-mono leading-relaxed">{msg.content}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     )}
                 </div>
 
-                {/* Input Control Interface */}
-                <div className="p-4 bg-white border-t border-slate-200 shadow-md">
-                    <div className="flex gap-3 max-w-4xl mx-auto">
+                {/* Bottom Input Execution Interface Console Box */}
+                <footer className="shrink-0 border-t border-slate-800/60 bg-slate-900/20 p-4">
+                    <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 p-1.5 focus-within:border-slate-700 transition-colors">
                         <input
                             value={question}
                             onChange={(e) => setQuestion(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && askQuestion()}
-                            placeholder={loading ? "Extracting context chunks and evaluating prompt parameters..." : "Query cluster log distributions or enterprise security architectures..."}
-                            className="border border-slate-300 rounded-lg p-3.5 flex-1 text-sm bg-slate-50 focus:outline-none focus:bg-white focus:border-slate-900 transition-all disabled:opacity-60"
+                            placeholder={loading ? "Evaluating execution trace vector buffers..." : "Query cluster logs or security parameters..."}
+                            className="flex-1 bg-transparent px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none disabled:opacity-50"
                             disabled={loading}
                         />
                         <button
                             onClick={askQuestion}
                             disabled={loading || !question.trim()}
-                            className="px-6 py-3.5 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-lg shadow transition-all disabled:opacity-40 disabled:hover:bg-slate-900"
+                            className="flex h-9 items-center justify-center rounded-lg bg-white px-4 text-xs font-semibold tracking-wide text-slate-950 transition-all hover:bg-slate-200 active:scale-[0.97] disabled:bg-slate-900 disabled:text-slate-700 disabled:pointer-events-none"
                         >
-                            {loading ? "Thinking..." : "Ask Core"}
+                            {loading ? "Processing..." : "Execute"}
                         </button>
                     </div>
-                </div>
+                </footer>
 
-            </div>
+            </main>
         </div>
     );
 }
