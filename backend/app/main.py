@@ -32,8 +32,8 @@ app.add_middleware(
 Instrumentator().instrument(app).expose(app)
 
 # Mount Routers under consistent architectural API endpoints
-app.include_router(document_router, prefix="/api")
-app.include_router(rag_router, prefix="/api")
+app.include_router(document_router)
+app.include_router(rag_router)
 app.include_router(chat_router, prefix="/api")
 
 
