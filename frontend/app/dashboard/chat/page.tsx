@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
     createChatSession,
     fetchAllSessions,
@@ -27,6 +27,15 @@ export default function ChatPage() {
     // Observability Vector Filter Flags
     const [selectedService, setSelectedService] = useState<string | null>(null);
     const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
+
+    // 🔐 ATOMIC CONTROL REFS: Stops background DB calls from clearing active chat streams
+    const activeSessionIdRef = useRef<string | null>(null);
+    const skipHistoryFetch = useRef(false);
+
+    // Sync ref tracking with state changes
+    useEffect(() => {
+        activeSessionIdRef.current = activeSessionId;
+    }, [activeSessionId]);
 
     // 1. Initial Sync Hook: Sync historical list from PostgreSQL database
     useEffect(() => {
@@ -57,6 +66,12 @@ export default function ChatPage() {
             return;
         }
 
+        // 🛑 LOCK CHECK: If this active ID change came from askQuestion initializing a thread, skip database pull
+        if (skipHistoryFetch.current) {
+            skipHistoryFetch.current = false; // Release lock
+            return;
+        }
+
         const sessionId: string = activeSessionId;
 
         async function syncMessageChainLogs() {
@@ -64,8 +79,10 @@ export default function ChatPage() {
                 const logData = await fetchSessionHistory(sessionId);
                 console.log("Raw Chat Hydration API Payload Trace:", logData);
 
-                // Safe Extraction Check: Accommodates both raw objects containing .messages 
-                // and API clients that already automatically return raw arrays.
+                // Anti-Stale Guard: Ensure the user hasn't switched sessions while waiting for this fetch
+                if (sessionId !== activeSessionIdRef.current) return;
+
+                // Safe Extraction Check
                 if (logData && logData.messages) {
                     setMessages(logData.messages);
                 } else if (Array.isArray(logData)) {
@@ -76,7 +93,9 @@ export default function ChatPage() {
                 }
             } catch (err) {
                 console.error("Could not retrieve session interaction context blocks:", err);
-                setMessages([]);
+                if (sessionId === activeSessionIdRef.current) {
+                    setMessages([]);
+                }
             }
         }
         syncMessageChainLogs();
@@ -87,13 +106,19 @@ export default function ChatPage() {
         if (!question.trim() || loading) return;
 
         let targetSessionId = activeSessionId;
+        const currentQuestionText = question.trim();
 
-        // Lazy-Initialization Guard: If a user types directly into an empty canvas screen, 
-        // dynamically generate the underlying database session record first!
+        setQuestion("");
+        setLoading(true);
+
+        // Lazy-Initialization Guard: Generate database session record on empty canvas
         if (!targetSessionId) {
             try {
-                setLoading(true);
-                const generatedTitle = question.length > 25 ? `${question.slice(0, 25)}...` : question;
+                const generatedTitle = currentQuestionText.length > 25 ? `${currentQuestionText.slice(0, 25)}...` : currentQuestionText;
+
+                // 🔐 ENGAGE BACKEND SKIP LOCK: Tells the history hook not to overwrite this streaming lifecycle
+                skipHistoryFetch.current = true;
+
                 const newSession = await createChatSession(generatedTitle);
                 setSessionsList(prev => [newSession, ...prev]);
                 targetSessionId = newSession.id;
@@ -101,18 +126,14 @@ export default function ChatPage() {
             } catch (err) {
                 console.error("Aborting stream: Auto-thread record instantiation failed:", err);
                 alert("Failed to initialize conversational workspace environment context row.");
+                skipHistoryFetch.current = false;
                 setLoading(false);
                 return;
             }
         }
 
-        const userMessage: Message = { role: "user", content: question };
-        setMessages((prev) => [...prev, userMessage]);
-        setQuestion("");
-        setLoading(true);
-
-        // Prep downstream slot for upcoming streaming chunk additions
-        setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+        const userMessage: Message = { role: "user", content: currentQuestionText };
+        setMessages((prev) => [...prev, userMessage, { role: "assistant", content: "" }]);
 
         try {
             const response = await fetch("/api/rag/stream", {
@@ -123,7 +144,7 @@ export default function ChatPage() {
                 },
                 body: JSON.stringify({
                     tenant_id: "company-a",
-                    session_id: targetSessionId, // Links embedding response chains cleanly into SQL foreign keys
+                    session_id: targetSessionId,
                     query: userMessage.content,
                     environment: selectedEnv || "",
                     severity: "",
@@ -146,20 +167,25 @@ export default function ChatPage() {
                 const chunk = decoder.decode(value, { stream: true });
                 fullAssistantText += chunk;
 
-                setMessages((prev) => {
-                    const updated = [...prev];
-                    if (updated.length > 0) {
-                        updated[updated.length - 1] = { role: "assistant", content: fullAssistantText };
-                    }
-                    return updated;
-                });
+                // Ensure stream text updates only append if the user is actively viewing this thread
+                if (targetSessionId === activeSessionIdRef.current) {
+                    setMessages((prev) => {
+                        const updated = [...prev];
+                        if (updated.length > 0) {
+                            updated[updated.length - 1] = { role: "assistant", content: fullAssistantText };
+                        }
+                        return updated;
+                    });
+                }
             }
         } catch (error) {
             console.error("Streaming Generation Error Stack:", error);
-            setMessages((prev) => [
-                ...prev.slice(0, -1),
-                { role: "assistant", content: "A structural fault occurred while recording streaming inference data output blocks." }
-            ]);
+            if (targetSessionId === activeSessionIdRef.current) {
+                setMessages((prev) => [
+                    ...prev.slice(0, -1),
+                    { role: "assistant", content: "A structural fault occurred while recording streaming inference data output blocks." }
+                ]);
+            }
         } finally {
             setLoading(false);
         }
