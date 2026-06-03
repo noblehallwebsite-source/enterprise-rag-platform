@@ -869,7 +869,8 @@
 
 import time
 from sqlalchemy.orm import Session
-from app.database.base import SessionLocal # 👈 Import your actual sessionmaker factory!
+from app.database.connection import SessionLocal
+
 
 from app.services.hybrid_search_service import hybrid_search
 from app.services.ai_service import generate_ai_response
