@@ -24,9 +24,10 @@ def get_tenant_dashboard_metrics(db: Session, tenant_id: str) -> dict:
     )
 
     # 3. Total message blocks generated across all tenant sessions
+    # 🚀 Fixed: Updated the join clause to match the schema's 'session_id' attribute
     message_count = (
         db.query(Message)
-        .join(ChatSession, Message.chat_session_id == ChatSession.id)
+        .join(ChatSession, Message.session_id == ChatSession.id)
         .filter(ChatSession.tenant_id == tenant_id)
         .count()
     )
