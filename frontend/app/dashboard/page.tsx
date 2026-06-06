@@ -2,15 +2,14 @@
 
 import { useEffect, useState } from "react";
 
-// Update your local TypeScript validation boundary layout structure
 interface DashboardStats {
     documents: number;
     chat_sessions: number;
     messages: number;
     tenants: number;
-    success_rate: number;   // 🚀 Added
-    avg_latency: number;    // 🚀 Added
-    total_requests: number; // 🚀 Added
+    success_rate: number;
+    avg_latency: number;
+    total_requests: number;
 }
 
 interface StatCardProps {
@@ -87,14 +86,44 @@ export default function DashboardPage() {
                     ⚠️ Operational Trace Error: {error}
                 </div>
             ) : stats ? (
-                // 📊 Expanded 6-Card High-Performance System Grid Layout
+                // 📊 6-Card Grid Layout with Optional Chaining and Zero Fallbacks
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                    <StatCard title="Total Requests" value={stats.total_requests.toLocaleString()} icon="⚡" description="Total incoming execution triggers" />
-                    <StatCard title="Pipeline Accuracy" value={`${stats.success_rate}%`} icon="🎯" description="Successful prompt execution matrix ratio" />
-                    <StatCard title="Avg Latency" value={`${stats.avg_latency}s`} icon="⏱️" description="Average completion transaction roundtrip" />
-                    <StatCard title="Documents" value={stats.documents.toLocaleString()} icon="📂" description="Indexed knowledge sources" />
-                    <StatCard title="Chat Sessions" value={stats.chat_sessions.toLocaleString()} icon="🧠" description="Active intelligence frameworks" />
-                    <StatCard title="Messages" value={stats.messages.toLocaleString()} icon="💬" description="Total pipeline transactions" />
+                    <StatCard
+                        title="Total Requests"
+                        value={(stats?.total_requests || 0).toLocaleString()}
+                        icon="⚡"
+                        description="Total incoming execution triggers"
+                    />
+                    <StatCard
+                        title="Pipeline Accuracy"
+                        value={`${stats?.success_rate || 0}%`}
+                        icon="🎯"
+                        description="Successful prompt execution matrix ratio"
+                    />
+                    <StatCard
+                        title="Avg Latency"
+                        value={`${stats?.avg_latency || 0}s`}
+                        icon="⏱️"
+                        description="Average completion transaction roundtrip"
+                    />
+                    <StatCard
+                        title="Documents"
+                        value={(stats?.documents || 0).toLocaleString()}
+                        icon="📂"
+                        description="Indexed knowledge sources"
+                    />
+                    <StatCard
+                        title="Chat Sessions"
+                        value={(stats?.chat_sessions || 0).toLocaleString()}
+                        icon="🧠"
+                        description="Active intelligence frameworks"
+                    />
+                    <StatCard
+                        title="Messages"
+                        value={(stats?.messages || 0).toLocaleString()}
+                        icon="💬"
+                        description="Total pipeline transactions"
+                    />
                 </div>
             ) : null}
         </div>
