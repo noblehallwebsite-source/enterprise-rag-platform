@@ -867,183 +867,310 @@
 
 
 
-import time
-from sqlalchemy.orm import Session
-from app.database.connection import SessionLocal
+# import time
+# from sqlalchemy.orm import Session
+# from app.database.connection import SessionLocal
 
 
-from app.services.hybrid_search_service import hybrid_search
-from app.services.ai_service import generate_ai_response
-from app.services.rerank_service import rerank_documents
+# from app.services.hybrid_search_service import hybrid_search
+# from app.services.ai_service import generate_ai_response
+# from app.services.rerank_service import rerank_documents
 
-# Import the service CRUD functions that accept (db, session_id, ...)
-from app.services.chat_service import (
-    save_message,
-    get_messages as get_conversation_history
-)
+# # Import the service CRUD functions that accept (db, session_id, ...)
+# from app.services.chat_service import (
+#     save_message,
+#     get_messages as get_conversation_history
+# )
 
-# FastAPI Streaming Import
-from fastapi.responses import StreamingResponse
+# # FastAPI Streaming Import
+# from fastapi.responses import StreamingResponse
 
-# Centralized Prometheus operational metrics instrumentation
-from app.services.metrics_service import (
-    rag_requests_total,
-    rag_failures_total,
-    rag_latency_seconds,
-    retrieved_documents_total
-)
+# # Centralized Prometheus operational metrics instrumentation
+# from app.services.metrics_service import (
+#     rag_requests_total,
+#     rag_failures_total,
+#     rag_latency_seconds,
+#     retrieved_documents_total
+# )
 
-# Evaluation service module import
-from app.services.evaluation_service import evaluate_grounding
+# # Evaluation service module import
+# from app.services.evaluation_service import evaluate_grounding
 
 
-# =====================================================================
-# TENANT-AWARE BACKGROUND WORKER TASK
-# =====================================================================
-def perform_background_evaluation_and_memory(
-    tenant_id: str,        
-    full_response_text: dict, 
-    reranked_docs: list, 
-    session_id: str, 
-    query: str
-):
-    """
-    Runs safely in a separate thread managed by FastAPI after the token stream ends.
-    Spawns an isolated database connection context to commit logs without thread bleeding.
-    """
-    actual_text = full_response_text.get("text", "")
-    print(f"\n[BACKGROUND] Starting evaluation/memory sequence for tenant: {tenant_id} | session: {session_id}")
+# # =====================================================================
+# # TENANT-AWARE BACKGROUND WORKER TASK
+# # =====================================================================
+# def perform_background_evaluation_and_memory(
+#     tenant_id: str,        
+#     full_response_text: dict, 
+#     reranked_docs: list, 
+#     session_id: str, 
+#     query: str
+# ):
+#     """
+#     Runs safely in a separate thread managed by FastAPI after the token stream ends.
+#     Spawns an isolated database connection context to commit logs without thread bleeding.
+#     """
+#     actual_text = full_response_text.get("text", "")
+#     print(f"\n[BACKGROUND] Starting evaluation/memory sequence for tenant: {tenant_id} | session: {session_id}")
     
-    if not actual_text:
-        print("[BACKGROUND FAILURE] Generated text buffer was empty. Skipping sequence.")
-        return
+#     if not actual_text:
+#         print("[BACKGROUND FAILURE] Generated text buffer was empty. Skipping sequence.")
+#         return
 
-    # 1. Run Grounding Evaluation on the final text string
-    try:
-        evaluation_result = evaluate_grounding(
-            answer=actual_text,
-            retrieved_documents=reranked_docs
-        )
-        print(f"[EVALUATION SUCCESS] Session: {session_id} | Result: {evaluation_result}")
-    except Exception as eval_error:
-        print(f"[EVALUATION FAILURE] Could not evaluate grounding: {eval_error}")
+#     # 1. Run Grounding Evaluation on the final text string
+#     try:
+#         evaluation_result = evaluate_grounding(
+#             answer=actual_text,
+#             retrieved_documents=reranked_docs
+#         )
+#         print(f"[EVALUATION SUCCESS] Session: {session_id} | Result: {evaluation_result}")
+#     except Exception as eval_error:
+#         print(f"[EVALUATION FAILURE] Could not evaluate grounding: {eval_error}")
 
-    # 2. Spawn a fresh session connection from the pool context specifically for this thread
-    db: Session = SessionLocal()
-    try:
-        # Save Conversational Turn to History using the active db session handle
-        save_message(db=db, session_id=session_id, role="user", content=query)
-        save_message(db=db, session_id=session_id, role="assistant", content=actual_text)
-        print(f"[MEMORY SUCCESS] Chat history appended safely to PostgreSQL for session: {session_id}")
-    except Exception as mem_error:
-        print(f"[MEMORY FAILURE] Could not persist message timeline blocks: {mem_error}")
-    finally:
-        db.close() # 👈 CRUCIAL: Always close the thread connection handle to avoid connection pool leaks!
-
-
-# =====================================================================
-# CLEAN CHUNK STREAM GENERATOR
-# =====================================================================
-def stream_llm_response(client, augmented_prompt, shared_buffer: dict):
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an enterprise infrastructure AI assistant."
-            },
-            {
-                "role": "user",
-                "content": augmented_prompt
-            }
-        ],
-        stream=True
-    )
-
-    full_response_text = ""
-    for chunk in response:
-        if chunk.choices and chunk.choices[0].delta.content:
-            delta = chunk.choices[0].delta.content
-            full_response_text += delta
-            yield delta
-
-    # Store the complete text in the shared dictionary reference so the background worker task can read it
-    shared_buffer["text"] = full_response_text
+#     # 2. Spawn a fresh session connection from the pool context specifically for this thread
+#     db: Session = SessionLocal()
+#     try:
+#         # Save Conversational Turn to History using the active db session handle
+#         save_message(db=db, session_id=session_id, role="user", content=query)
+#         save_message(db=db, session_id=session_id, role="assistant", content=actual_text)
+#         print(f"[MEMORY SUCCESS] Chat history appended safely to PostgreSQL for session: {session_id}")
+#     except Exception as mem_error:
+#         print(f"[MEMORY FAILURE] Could not persist message timeline blocks: {mem_error}")
+#     finally:
+#         db.close() # 👈 CRUCIAL: Always close the thread connection handle to avoid connection pool leaks!
 
 
-# =====================================================================
-# TENANT-ISOLATED BLOCKING RAG PIPELINE
-# =====================================================================
-def run_rag_pipeline(
-    db: Session,           # 👈 Added database connection dependency requirement hook
-    tenant_id: str,        
-    session_id: str,
-    query: str,
-    filters: dict = None
-):
-    rag_requests_total.inc()
-    start_time = time.time()
+# # =====================================================================
+# # CLEAN CHUNK STREAM GENERATOR
+# # =====================================================================
+# def stream_llm_response(client, augmented_prompt, shared_buffer: dict):
+#     response = client.chat.completions.create(
+#         model="llama-3.1-8b-instant",
+#         messages=[
+#             {
+#                 "role": "system",
+#                 "content": "You are an enterprise infrastructure AI assistant."
+#             },
+#             {
+#                 "role": "user",
+#                 "content": augmented_prompt
+#             }
+#         ],
+#         stream=True
+#     )
 
-    try:
-        conversation_history = get_conversation_history(db=db, session_id=session_id)
+#     full_response_text = ""
+#     for chunk in response:
+#         if chunk.choices and chunk.choices[0].delta.content:
+#             delta = chunk.choices[0].delta.content
+#             full_response_text += delta
+#             yield delta
 
-        history_context = ""
-        for message in conversation_history:
-            # Handle both model objects or dict responses gracefully
-            role = message.role if hasattr(message, "role") else message["role"]
-            content = message.content if hasattr(message, "content") else message["content"]
-            history_context += f"{role}: {content}\n"
+#     # Store the complete text in the shared dictionary reference so the background worker task can read it
+#     shared_buffer["text"] = full_response_text
 
-        # Pass tenant id directly down to scope the knowledge base query
-        retrieved_docs = hybrid_search(tenant_id=tenant_id, query=query, top_k=10, filters=filters)
-        reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
+
+# # =====================================================================
+# # TENANT-ISOLATED BLOCKING RAG PIPELINE
+# # =====================================================================
+# def run_rag_pipeline(
+#     db: Session,           # 👈 Added database connection dependency requirement hook
+#     tenant_id: str,        
+#     session_id: str,
+#     query: str,
+#     filters: dict = None
+# ):
+#     rag_requests_total.inc()
+#     start_time = time.time()
+
+#     try:
+#         conversation_history = get_conversation_history(db=db, session_id=session_id)
+
+#         history_context = ""
+#         for message in conversation_history:
+#             # Handle both model objects or dict responses gracefully
+#             role = message.role if hasattr(message, "role") else message["role"]
+#             content = message.content if hasattr(message, "content") else message["content"]
+#             history_context += f"{role}: {content}\n"
+
+#         # Pass tenant id directly down to scope the knowledge base query
+#         retrieved_docs = hybrid_search(tenant_id=tenant_id, query=query, top_k=10, filters=filters)
+#         reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
         
-        retrieved_documents_total.observe(len(reranked_docs))
+#         retrieved_documents_total.observe(len(reranked_docs))
 
-        context = "\n".join([item["text"] for item in reranked_docs])
+#         context = "\n".join([item["text"] for item in reranked_docs])
 
-        augmented_prompt = f"""
-You are an enterprise infrastructure AI assistant.
+#         augmented_prompt = f"""
+# You are an enterprise infrastructure AI assistant.
 
-Conversation History:
-{history_context}
+# Conversation History:
+# {history_context}
 
-Retrieved Infrastructure Context:
-{context}
+# Retrieved Infrastructure Context:
+# {context}
 
-Current User Question:
-{query}
+# Current User Question:
+# {query}
 
-Return a JSON response with the keys:
-"answer": the final response text
-"documents": list of documents used
-"conversation_updated": true or false
-"next_followup_suggestions": 2–3 ideas for follow-up questions
-"critical_infrastructure_issue": true/false (detected security or availability risk)"""
+# Return a JSON response with the keys:
+# "answer": the final response text
+# "documents": list of documents used
+# "conversation_updated": true or false
+# "next_followup_suggestions": 2–3 ideas for follow-up questions
+# "critical_infrastructure_issue": true/false (detected security or availability risk)"""
 
-        ai_answer = generate_ai_response(augmented_prompt)
+#         ai_answer = generate_ai_response(augmented_prompt)
 
-        evaluation_result = evaluate_grounding(
-            answer=ai_answer,
-            retrieved_documents=reranked_docs
+#         evaluation_result = evaluate_grounding(
+#             answer=ai_answer,
+#             retrieved_documents=reranked_docs
+#         )
+
+#         save_message(db=db, session_id=session_id, role="user", content=query)
+#         save_message(db=db, session_id=session_id, role="assistant", content=ai_answer)
+
+#         total_latency = time.time() - start_time
+#         rag_latency_seconds.observe(total_latency)
+
+#         return {
+#             "query": query,
+#             "retrieved_context": reranked_docs,
+#             "ai_answer": ai_answer,
+#             "evaluation": evaluation_result
+#         }
+
+#     except Exception as e:
+#         rag_failures_total.inc()
+#         raise e
+
+
+# # =====================================================================
+# # TENANT-ISOLATED STREAMING RAG PIPELINE
+# # =====================================================================
+# def run_streaming_rag_pipeline(
+#     client,
+#     db: Session,           # 👈 Kept database handle consistency available for history retrieval
+#     tenant_id: str,        
+#     session_id: str,
+#     query: str,
+#     background_tasks,  
+#     filters: dict = None
+# ):
+#     rag_requests_total.inc()
+#     start_time = time.time()
+
+#     try:
+#         # Pull history from the active DB mapping layer to build complete prompts
+#         conversation_history = get_conversation_history(db=db, session_id=session_id)
+
+#         history_context = ""
+#         for message in conversation_history:
+#             role = message.role if hasattr(message, "role") else message["role"]
+#             content = message.content if hasattr(message, "content") else message["content"]
+#             history_context += f"{role}: {content}\n"
+
+#         retrieved_docs = hybrid_search(
+#             tenant_id=tenant_id,
+#             query=query,
+#             top_k=10,
+#             filters=filters
+#         )
+
+#         reranked_docs = rerank_documents(
+#             query=query,
+#             documents=retrieved_docs,
+#             top_k=3
+#         )
+
+#         retrieved_documents_total.observe(len(reranked_docs))
+#         context = "\n".join([item["text"] for item in reranked_docs])
+
+#         augmented_prompt = f"""
+# You are an enterprise infrastructure AI assistant.
+
+# Conversation History:
+# {history_context}
+
+# Retrieved Infrastructure Context:
+# {context}
+
+# Current User Question:
+# {query}
+
+# Provide a direct, comprehensive engineering markdown response based on the context.
+# """
+
+#         total_latency = time.time() - start_time
+#         rag_latency_seconds.observe(total_latency)
+
+#         shared_buffer = {"text": ""}
+
+#         # Pass parameters off to background processor safely
+#         background_tasks.add_task(
+#             perform_background_evaluation_and_memory,
+#             tenant_id=tenant_id,
+#             full_response_text=shared_buffer,
+#             reranked_docs=reranked_docs,
+#             session_id=session_id,
+#             query=query
+#         )
+
+#         return StreamingResponse(
+#             stream_llm_response(
+#                 client=client,
+#                 augmented_prompt=augmented_prompt,
+#                 shared_buffer=shared_buffer
+#             ),
+#             media_type="text/plain"
+#         )
+
+#     except Exception as e:
+#         rag_failures_total.inc()
+#         raise e
+
+
+
+
+
+# =====================================================================
+# CLEAN CHUNK STREAM GENERATOR (INSTRUMENTED)
+# =====================================================================
+def stream_llm_response(client, augmented_prompt, shared_buffer: dict, start_time: float):
+    """
+    Handles token output generation over HTTP while tracking execution latency 
+    and capturing mid-stream infrastructure generation errors.
+    """
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are an enterprise infrastructure AI assistant."},
+                {"role": "user", "content": augmented_prompt}
+            ],
+            stream=True
         )
 
-        save_message(db=db, session_id=session_id, role="user", content=query)
-        save_message(db=db, session_id=session_id, role="assistant", content=ai_answer)
+        full_response_text = ""
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta.content
+                full_response_text += delta
+                yield delta
 
+        # Store the complete text for background worker tasks
+        shared_buffer["text"] = full_response_text
+
+        # ⏱️ SUCCESS: Stream completed successfully! Calculate complete roundtrip latency.
         total_latency = time.time() - start_time
         rag_latency_seconds.observe(total_latency)
 
-        return {
-            "query": query,
-            "retrieved_context": reranked_docs,
-            "ai_answer": ai_answer,
-            "evaluation": evaluation_result
-        }
-
-    except Exception as e:
+    except Exception as stream_error:
+        # 🎯 FAILURE: Stream crashed or timed out mid-generation!
         rag_failures_total.inc()
-        raise e
+        print(f"[STREAM FAILURE] Token generation interrupted: {stream_error}")
+        raise stream_error
 
 
 # =====================================================================
@@ -1051,18 +1178,19 @@ Return a JSON response with the keys:
 # =====================================================================
 def run_streaming_rag_pipeline(
     client,
-    db: Session,           # 👈 Kept database handle consistency available for history retrieval
+    db: Session,           
     tenant_id: str,        
     session_id: str,
     query: str,
     background_tasks,  
     filters: dict = None
 ):
+    # ⚡ Ingestion count increments immediately on route entry
     rag_requests_total.inc()
     start_time = time.time()
 
     try:
-        # Pull history from the active DB mapping layer to build complete prompts
+        # Pull conversational history contexts
         conversation_history = get_conversation_history(db=db, session_id=session_id)
 
         history_context = ""
@@ -1071,19 +1199,11 @@ def run_streaming_rag_pipeline(
             content = message.content if hasattr(message, "content") else message["content"]
             history_context += f"{role}: {content}\n"
 
-        retrieved_docs = hybrid_search(
-            tenant_id=tenant_id,
-            query=query,
-            top_k=10,
-            filters=filters
-        )
+        # Knowledge search orchestration
+        retrieved_docs = hybrid_search(tenant_id=tenant_id, query=query, top_k=10, filters=filters)
+        reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
 
-        reranked_docs = rerank_documents(
-            query=query,
-            documents=retrieved_docs,
-            top_k=3
-        )
-
+        # Record document metrics
         retrieved_documents_total.observe(len(reranked_docs))
         context = "\n".join([item["text"] for item in reranked_docs])
 
@@ -1102,12 +1222,9 @@ Current User Question:
 Provide a direct, comprehensive engineering markdown response based on the context.
 """
 
-        total_latency = time.time() - start_time
-        rag_latency_seconds.observe(total_latency)
-
         shared_buffer = {"text": ""}
 
-        # Pass parameters off to background processor safely
+        # Pass tracking variables safely down to the execution worker
         background_tasks.add_task(
             perform_background_evaluation_and_memory,
             tenant_id=tenant_id,
@@ -1117,15 +1234,18 @@ Provide a direct, comprehensive engineering markdown response based on the conte
             query=query
         )
 
+        # 🚀 Pass the persistent start_time token into the stream generator context
         return StreamingResponse(
             stream_llm_response(
                 client=client,
                 augmented_prompt=augmented_prompt,
-                shared_buffer=shared_buffer
+                shared_buffer=shared_buffer,
+                start_time=start_time
             ),
             media_type="text/plain"
         )
 
     except Exception as e:
+        # Catch any errors that happen early during DB/Chroma setup phases
         rag_failures_total.inc()
         raise e
