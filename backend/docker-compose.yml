@@ -110,10 +110,9 @@ services:
     ports:
       - "127.0.0.1:9090:9090"  # Prometheus UI accessible locally or via SSH tunnel
     volumes:
-      # 📂 Mounts the core config directory we created in the last step
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      # 💾 MUST ADD THIS: A persistent volume so data survives container updates!
-      - prometheus_tsdb:/prometheus 
+     # 🚀 FIXED: Point directly to the root-level config file in your backend folder
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_tsdb:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
