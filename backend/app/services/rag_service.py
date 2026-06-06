@@ -1149,7 +1149,7 @@ from app.services.chat_service import (
     get_messages as get_conversation_history
 )
 
-from app.metrics_service import (
+from app.services.metrics_service import (
     rag_requests_total,
     rag_failures_total,
     retrieved_documents_total,
