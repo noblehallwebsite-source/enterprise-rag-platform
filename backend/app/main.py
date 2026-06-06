@@ -8,6 +8,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from app.routes.document_routes import router as document_router
 from app.routes.rag_routes import router as rag_router
 from app.routes.chat_routes import router as chat_router
+from app.routes.dashboard_routes import router as dashboard_router  # 👈 Added the missing dashboard import
 from app.database.init_db import init_database  # 👈 Import your routine directly
 
 # Run your initialization sequence immediately on app context load
@@ -40,6 +41,7 @@ Instrumentator().instrument(app).expose(app)
 app.include_router(document_router)
 app.include_router(rag_router)
 app.include_router(chat_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/")
