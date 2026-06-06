@@ -3,6 +3,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
+# ... your existing imports ...
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST  # ← ADD THESE
+from fastapi import Response  # ← ADD THIS
+
 
 # Explicitly import all router layers cleanly
 from app.routes.document_routes import router as document_router
@@ -56,3 +60,16 @@ def health():
     return {
         "status": "healthy"
     }
+
+# 👇 Expose the /metrics endpoint for Prometheus scraping tools
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    
+
+
+
+
+
+
