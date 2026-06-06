@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s # How frequently to scrape metrics
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'fastapi-rag-telemetry'
+    metrics_path: '/metrics'
+    static_configs:
+      # We use the internal container service name and port within the network mesh
+      - targets: ['enterprise-rag-backend:8000']

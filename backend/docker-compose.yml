@@ -101,6 +101,49 @@ services:
     networks:
       - enterprise-rag-net
 
+ # =====================================================================
+  # 5. OPEN-SOURCE TELEMETRY DATA PIPELINE
+  # =====================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: enterprise-rag-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"  # Prometheus UI accessible locally or via SSH tunnel
+    volumes:
+      # 📂 Mounts the core config directory we created in the last step
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      # 💾 MUST ADD THIS: A persistent volume so data survives container updates!
+      - prometheus_tsdb:/prometheus 
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - enterprise-rag-net
+    restart: unless-stopped
+    depends_on:
+      - backend  # Wait for the FastAPI app to be ready before starting scrape
+
+# =====================================================================
+  # 6. Grafana (Open Source Analytics & Visualization Dashboard)
+  # =====================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: enterprise-rag-grafana
+    ports:
+      - "127.0.0.1:3001:3000"  # 🚀 Changed host mapping to 3001 to avoid Next.js conflict
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false  # Lock down registrations
+    volumes:
+      - grafana_storage:/var/lib/grafana
+    networks:
+      - enterprise-rag-net
+    restart: unless-stopped
+    depends_on:
+      - prometheus  # Wait for Prometheus to be available
+
+
 networks:
   enterprise-rag-net:
     external: true
@@ -109,3 +152,5 @@ volumes:
   chroma_data:
   redis_data:
   postgres_data: # 💾 Persistent database volume
+  prometheus_tsdb: # 💾 Make sure this volume is declared here!
+  grafana_storage:
