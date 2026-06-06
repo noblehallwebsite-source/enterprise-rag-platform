@@ -67,26 +67,24 @@
 
 #     return result
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from app.models.request_models import (
-    RagQueryRequest
-)
+
+
+
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.models.request_models import RagQueryRequest
 from app.services.rag_service import (
     run_rag_pipeline,
     run_streaming_rag_pipeline
 )
-from app.services.security_service import (
-    authorize_request
-)
+from app.services.security_service import authorize_request
 from app.services.ai_service import client
-
-# Import your database session dependency tracking block at the top of the file
 from app.database.dependencies import get_db
-from sqlalchemy.orm import Session
 
 router = APIRouter()
-
 
 # =====================================================================
 # REAL-TIME STREAMING RAG ROUTE (WITH CROSS-TENANT VERIFICATION)
@@ -96,9 +94,9 @@ def rag_query_stream(
     data: RagQueryRequest, 
     background_tasks: BackgroundTasks,
     auth: dict = Depends(authorize_request),
-    db: Session = Depends(get_db) # 👈 1. INJECT THE DATABASE ENGINE HERE
+    db: Session = Depends(get_db) 
 ): 
-    # 🔥 STEP 7: ENFORCE STRICT TENANT SECURITY CROSS-CHECK
+    # Enforce strict tenant security cross-check
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -112,18 +110,16 @@ def rag_query_stream(
         "service": data.service
     }
 
-    # 2. PASS DB down into your background stream executor 
-    result = run_streaming_rag_pipeline(
+    # Pass DB handle into the streaming executor for persistent history and memory
+    return run_streaming_rag_pipeline(
         client=client,
-        db=db, # 👈 3. SUPPLY THE TRANSACTION LAYER HERE
+        db=db, 
         tenant_id=data.tenant_id,  
         session_id=data.session_id,
         query=data.query,
         background_tasks=background_tasks, 
         filters=filters
     )
-
-    return result
 
 
 # =====================================================================
@@ -132,9 +128,10 @@ def rag_query_stream(
 @router.post("/rag")
 def rag_query(
     data: RagQueryRequest,
-    auth: dict = Depends(authorize_request)
+    auth: dict = Depends(authorize_request),
+    db: Session = Depends(get_db) # 👈 FIXED: Injected DB dependency
 ):
-    # 🔥 STEP 7: ENFORCE STRICT TENANT SECURITY CROSS-CHECK
+    # Enforce strict tenant security cross-check
     if auth["tenant_id"] != data.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -148,8 +145,10 @@ def rag_query(
         "service": data.service
     }
 
+    # 🚀 FIXED: Passed db=db to allow the pipeline to persist messages and retrieve history
     result = run_rag_pipeline(
-        tenant_id=data.tenant_id,  # Guaranteed safe by the cross-check guard above
+        db=db, 
+        tenant_id=data.tenant_id,
         session_id=data.session_id,
         query=data.query,
         filters=filters

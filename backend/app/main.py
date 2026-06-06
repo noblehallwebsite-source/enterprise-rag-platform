@@ -107,7 +107,15 @@ app.add_middleware(
 # 🚀 INITIALIZE & EXPOSE TELEMETRY
 # This instruments the app AND handles the /metrics endpoint seamlessly, 
 # exposing both default traffic metrics and your custom rag_* service metrics.
-Instrumentator().instrument(app).expose(app)
+instrumentator = Instrumentator()
+
+# Manually add your custom metrics to the instrumentator's registry
+instrumentator.add(lambda reg: reg.add(rag_requests_total))
+instrumentator.add(lambda reg: reg.add(rag_failures_total))
+instrumentator.add(lambda reg: reg.add(rag_latency_seconds))
+instrumentator.add(lambda reg: reg.add(retrieved_documents_total))
+
+instrumentator.instrument(app).expose(app)
 
 # Mount Routers under consistent architectural API endpoints
 app.include_router(document_router)

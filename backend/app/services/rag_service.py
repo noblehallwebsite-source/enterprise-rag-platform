@@ -1137,7 +1137,7 @@
 import time
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from prometheus_client import Counter, Histogram
+
 
 from app.database.connection import SessionLocal
 from app.services.hybrid_search_service import hybrid_search
@@ -1149,29 +1149,11 @@ from app.services.chat_service import (
     get_messages as get_conversation_history
 )
 
-# =====================================================================
-# CENTRALIZED PROMETHEUS METRICS INSTRUMENTATION
-# =====================================================================
-rag_requests_total = Counter(
-    "rag_requests_total",
-    "Total number of incoming RAG execution requests"
-)
-
-rag_failures_total = Counter(
-    "rag_failures_total",
-    "Total number of failed RAG request pipeline executions"
-)
-
-retrieved_documents_total = Histogram(
-    "retrieved_documents_total",
-    "Distribution of retrieved and reranked documents passed to context",
-    buckets=[1, 2, 3, 5, 10]
-)
-
-rag_latency_seconds = Histogram(
-    "rag_latency_seconds",
-    "Total end-to-end RAG application transaction roundtrip latency",
-    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+from app.metrics_service import (
+    rag_requests_total,
+    rag_failures_total,
+    retrieved_documents_total,
+    rag_latency_seconds
 )
 
 
