@@ -22,6 +22,11 @@ class DashboardStatsResponse(BaseModel):
     messages: int
     tenants: int
 
+    # 🚀 TELEMETRY ADDITIONS (Matches Next.js expected camelCase/snake_case keys)
+    total_requests: int = 0
+    success_rate: float = 100.0
+    avg_latency: float = 0.0
+
 @router.get("/stats", response_model=DashboardStatsResponse)
 def read_dashboard_stats(
     db: Session = Depends(get_db),
