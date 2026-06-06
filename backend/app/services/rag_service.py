@@ -1134,20 +1134,111 @@
 
 
 
+import time
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from prometheus_client import Counter, Histogram
+
+from app.database.connection import SessionLocal
+from app.services.hybrid_search_service import hybrid_search
+from app.services.ai_service import generate_ai_response
+from app.services.rerank_service import rerank_documents
+from app.services.evaluation_service import evaluate_grounding
+from app.services.chat_service import (
+    save_message,
+    get_messages as get_conversation_history
+)
+
 # =====================================================================
-# CLEAN CHUNK STREAM GENERATOR (INSTRUMENTED)
+# CENTRALIZED PROMETHEUS METRICS INSTRUMENTATION
+# =====================================================================
+rag_requests_total = Counter(
+    "rag_requests_total",
+    "Total number of incoming RAG execution requests"
+)
+
+rag_failures_total = Counter(
+    "rag_failures_total",
+    "Total number of failed RAG request pipeline executions"
+)
+
+retrieved_documents_total = Histogram(
+    "retrieved_documents_total",
+    "Distribution of retrieved and reranked documents passed to context",
+    buckets=[1, 2, 3, 5, 10]
+)
+
+rag_latency_seconds = Histogram(
+    "rag_latency_seconds",
+    "Total end-to-end RAG application transaction roundtrip latency",
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+)
+
+
+# =====================================================================
+# TENANT-AWARE BACKGROUND WORKER TASK
+# =====================================================================
+def perform_background_evaluation_and_memory(
+    tenant_id: str,         
+    full_response_text: dict, 
+    reranked_docs: list, 
+    session_id: str, 
+    query: str
+):
+    """
+    Runs safely in a separate thread managed by FastAPI after the token stream ends.
+    Spawns an isolated database connection context to commit logs without thread bleeding.
+    """
+    actual_text = full_response_text.get("text", "")
+    print(f"\n[BACKGROUND] Starting evaluation/memory sequence for tenant: {tenant_id} | session: {session_id}")
+    
+    if not actual_text:
+        print("[BACKGROUND FAILURE] Generated text buffer was empty. Skipping sequence.")
+        return
+
+    # 1. Run Grounding Evaluation on the final text string
+    try:
+        evaluation_result = evaluate_grounding(
+            answer=actual_text,
+            retrieved_documents=reranked_docs
+        )
+        print(f"[EVALUATION SUCCESS] Session: {session_id} | Result: {evaluation_result}")
+    except Exception as eval_error:
+        print(f"[EVALUATION FAILURE] Could not evaluate grounding: {eval_error}")
+
+    # 2. Spawn a fresh session connection from the pool context specifically for this thread
+    db: Session = SessionLocal()
+    try:
+        # Save Conversational Turn to History using the active db session handle
+        save_message(db=db, session_id=session_id, role="user", content=query)
+        save_message(db=db, session_id=session_id, role="assistant", content=actual_text)
+        print(f"[MEMORY SUCCESS] Chat history appended safely to PostgreSQL for session: {session_id}")
+    except Exception as mem_error:
+        print(f"[MEMORY FAILURE] Could not persist message timeline blocks: {mem_error}")
+    finally:
+        db.close()  # 👈 CRUCIAL: Always close the thread connection handle to avoid pool leaks!
+
+
+# =====================================================================
+# CLEAN CHUNK STREAM GENERATOR (INSTRUMENTED FOR TRUE LATENCY)
 # =====================================================================
 def stream_llm_response(client, augmented_prompt, shared_buffer: dict, start_time: float):
     """
-    Handles token output generation over HTTP while tracking execution latency 
-    and capturing mid-stream infrastructure generation errors.
+    Yields chunks over HTTP stream while capturing real transactional runtime telemetry.
+    Saves metrics directly to Prometheus registry on completion or failure.
     """
     try:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role": "system", "content": "You are an enterprise infrastructure AI assistant."},
-                {"role": "user", "content": augmented_prompt}
+                {
+                    "role": "system",
+                    "content": "You are an enterprise infrastructure AI assistant."
+                },
+                {
+                    "role": "user",
+                    "content": augmented_prompt
+                }
             ],
             stream=True
         )
@@ -1159,38 +1250,37 @@ def stream_llm_response(client, augmented_prompt, shared_buffer: dict, start_tim
                 full_response_text += delta
                 yield delta
 
-        # Store the complete text for background worker tasks
+        # Store complete string response for background evaluation tracking tasks
         shared_buffer["text"] = full_response_text
 
-        # ⏱️ SUCCESS: Stream completed successfully! Calculate complete roundtrip latency.
+        # ⏱️ SUCCESS: Calculate complete roundtrip streaming latency and record it
         total_latency = time.time() - start_time
         rag_latency_seconds.observe(total_latency)
 
     except Exception as stream_error:
-        # 🎯 FAILURE: Stream crashed or timed out mid-generation!
+        # 🎯 MID-STREAM FAILURE: Stream dropped or network failed during generation
         rag_failures_total.inc()
         print(f"[STREAM FAILURE] Token generation interrupted: {stream_error}")
         raise stream_error
 
 
 # =====================================================================
-# TENANT-ISOLATED STREAMING RAG PIPELINE
+# TENANT-ISOLATED BLOCKING RAG PIPELINE
 # =====================================================================
-def run_streaming_rag_pipeline(
-    client,
-    db: Session,           
+def run_rag_pipeline(
+    db: Session,
     tenant_id: str,        
     session_id: str,
     query: str,
-    background_tasks,  
     filters: dict = None
 ):
-    # ⚡ Ingestion count increments immediately on route entry
+    """
+    Standard blocking pipeline execution context. Records complete operational state.
+    """
     rag_requests_total.inc()
     start_time = time.time()
 
     try:
-        # Pull conversational history contexts
         conversation_history = get_conversation_history(db=db, session_id=session_id)
 
         history_context = ""
@@ -1199,11 +1289,100 @@ def run_streaming_rag_pipeline(
             content = message.content if hasattr(message, "content") else message["content"]
             history_context += f"{role}: {content}\n"
 
-        # Knowledge search orchestration
+        # Multi-stage Knowledge retrieval context synthesis
         retrieved_docs = hybrid_search(tenant_id=tenant_id, query=query, top_k=10, filters=filters)
         reranked_docs = rerank_documents(query=query, documents=retrieved_docs, top_k=3)
+        
+        retrieved_documents_total.observe(len(reranked_docs))
 
-        # Record document metrics
+        context = "\n".join([item["text"] for item in reranked_docs])
+
+        augmented_prompt = f"""
+You are an enterprise infrastructure AI assistant.
+
+Conversation History:
+{history_context}
+
+Retrieved Infrastructure Context:
+{context}
+
+Current User Question:
+{query}
+
+Return a JSON response with the keys:
+"answer": the final response text
+"documents": list of documents used
+"conversation_updated": true or false
+"next_followup_suggestions": 2–3 ideas for follow-up questions
+"critical_infrastructure_issue": true/false (detected security or availability risk)"""
+
+        ai_answer = generate_ai_response(augmented_prompt)
+
+        evaluation_result = evaluate_grounding(
+            answer=ai_answer,
+            retrieved_documents=reranked_docs
+        )
+
+        save_message(db=db, session_id=session_id, role="user", content=query)
+        save_message(db=db, session_id=session_id, role="assistant", content=ai_answer)
+
+        # ⏱️ Record complete blocking transactional request latency
+        total_latency = time.time() - start_time
+        rag_latency_seconds.observe(total_latency)
+
+        return {
+            "query": query,
+            "retrieved_context": reranked_docs,
+            "ai_answer": ai_answer,
+            "evaluation": evaluation_result
+        }
+
+    except Exception as e:
+        rag_failures_total.inc()
+        raise e
+
+
+# =====================================================================
+# TENANT-ISOLATED STREAMING RAG PIPELINE
+# =====================================================================
+def run_streaming_rag_pipeline(
+    client,
+    db: Session,
+    tenant_id: str,        
+    session_id: str,
+    query: str,
+    background_tasks,  
+    filters: dict = None
+):
+    """
+    Streaming execution entry pipeline orchestration layer. Decouples contextual 
+    preparation execution run loops from lazy stream delivery interfaces.
+    """
+    rag_requests_total.inc()
+    start_time = time.time()
+
+    try:
+        conversation_history = get_conversation_history(db=db, session_id=session_id)
+
+        history_context = ""
+        for message in conversation_history:
+            role = message.role if hasattr(message, "role") else message["role"]
+            content = message.content if hasattr(message, "content") else message["content"]
+            history_context += f"{role}: {content}\n"
+
+        retrieved_docs = hybrid_search(
+            tenant_id=tenant_id,
+            query=query,
+            top_k=10,
+            filters=filters
+        )
+
+        reranked_docs = rerank_documents(
+            query=query,
+            documents=retrieved_docs,
+            top_k=3
+        )
+
         retrieved_documents_total.observe(len(reranked_docs))
         context = "\n".join([item["text"] for item in reranked_docs])
 
@@ -1224,7 +1403,7 @@ Provide a direct, comprehensive engineering markdown response based on the conte
 
         shared_buffer = {"text": ""}
 
-        # Pass tracking variables safely down to the execution worker
+        # Allocate contextual processing tracking tokens over to thread pool
         background_tasks.add_task(
             perform_background_evaluation_and_memory,
             tenant_id=tenant_id,
@@ -1234,7 +1413,7 @@ Provide a direct, comprehensive engineering markdown response based on the conte
             query=query
         )
 
-        # 🚀 Pass the persistent start_time token into the stream generator context
+        # 🚀 Pass the persistent start_time parameter directly into the generator thread
         return StreamingResponse(
             stream_llm_response(
                 client=client,
@@ -1246,6 +1425,6 @@ Provide a direct, comprehensive engineering markdown response based on the conte
         )
 
     except Exception as e:
-        # Catch any errors that happen early during DB/Chroma setup phases
+        # Catches failures if they break early in setup before streaming kicks off
         rag_failures_total.inc()
         raise e
