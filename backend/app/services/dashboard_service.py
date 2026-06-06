@@ -3,7 +3,7 @@ from app.models.document import Document
 from app.models.chat_session import ChatSession
 from app.models.message import Message
 
-from app.core.metrics import (
+from app.services.metric_service import (
     rag_requests_total,
     rag_failures_total,
     rag_latency_seconds,
