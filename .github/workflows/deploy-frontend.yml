@@ -46,13 +46,12 @@ jobs:
 
             echo "Navigating to frontend workspace..."
             cd frontend
-
-            echo "Stopping existing frontend containers..."
-            docker compose down
-
-            echo "Building and starting frontend..."
+            
+            # 3. Build and recreate the container seamlessly (No down step needed!)
+            echo "Building new layers and hot-swapping frontend container..."
             docker compose up --build -d
 
+          
             echo "Cleaning unused Docker artifacts..."
             docker image prune -f
 
